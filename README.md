@@ -4,8 +4,6 @@ Panasonic Let's Note 的 Ubuntu 控制中心，提供电池保养、圆形触控
 
 **0.20.2 · 测试版 · Ubuntu 26.04 amd64 / GNOME 50**
 
-作者与维护者：[AkaseToshiyuki](https://github.com/AkaseToshiyuki)。
-
 主要支持 **CF-SV7 / CFSV7-3L、BIOS V3.11L22**。其他机型可使用系统提供的通用控制；机型专用硬件功能仅在白名单设备上启用。本项目由社区独立开发，与 Panasonic 官方无隶属关系。
 
 ## 功能
