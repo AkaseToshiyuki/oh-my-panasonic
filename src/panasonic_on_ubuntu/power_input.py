@@ -50,7 +50,8 @@ def fixed_profiles(partner):
     return sorted(profiles, key=lambda profile: profile['position'])
 
 
-def detect(root=Path('/sys/class/power_supply'), typec=Path('/sys/class/typec'), cache=CACHE):
+def detect(root=Path('/sys/class/power_supply'), typec=Path('/sys/class/typec'), cache=CACHE,
+           dmi=Path('/sys/class/dmi/id')):
     ports = []
     adapters = [p for p in root.glob('*') if read(p/'type') == 'Mains']
     mains = [read(p/'online') for p in adapters]
@@ -147,6 +148,11 @@ def detect(root=Path('/sys/class/power_supply'), typec=Path('/sys/class/typec'),
     if not ports and len(active) == 1:
         measured = micro_value({'w':read(active[0]/'power_now')}, 'w')
     result.update(source=source, measured_input_w=measured)
+    if (read(dmi/'sys_vendor') == 'Panasonic Corporation'
+            and read(dmi/'product_name') in ('CFSV7-3L', 'CF-SV7HD9VS')):
+        # Panasonic's SV7 developer specifies 27 W for charging while powered on.
+        # See docs/hardware.zh-CN.md; this is a requirement, not a power reading.
+        result['charging_minimum_w'] = 27.0
     if measured is not None:
         result['input_label'] = f'{measured:g} W'
     return result

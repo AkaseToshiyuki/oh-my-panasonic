@@ -84,5 +84,14 @@ def describe(snapshot, care, samples=()):
         state = '等待电池读数'
     else:
         state = '已暂停充电' if status == 'Not charging' else '充电状态待确认'
+        if status == 'Not charging' and phase in ('charging', 'system', 'full', 'maintenance-full') and care.get('driver_mode') == 0 and not care.get('error'):
+            state = '等待充电'
+            ports = supply.get('ports', [])
+            minimum = supply.get('charging_minimum_w')
+            if source == 'typec' and supply.get('mains_online') is False and len(ports) == 1:
+                port = ports[0]
+                contract = port.get('contract_w')
+                if port.get('protocol') in ('PD', 'PD_PPS') and minimum and contract and 0 < contract < minimum:
+                    state = 'PD 供电不足，等待充电'
     return {'source':name, 'status':state, 'power':power,
             'summary':' · '.join(filter(None,(name,power,state)))}

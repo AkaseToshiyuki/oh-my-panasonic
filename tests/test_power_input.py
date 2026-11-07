@@ -38,6 +38,18 @@ class PowerInputTests(unittest.TestCase):
         self.contract(extra='POWER_SUPPLY_POWER_NOW=7200000')
         self.assertEqual(detect(self.supplies,self.typec)['ports'][0]['measured_input_w'],7.2)
 
+    def test_charging_requirement_is_scoped_to_known_sv7_models(self):
+        self.contract()
+        dmi = self.root/'dmi'
+        dmi.mkdir()
+        (dmi/'sys_vendor').write_text('Panasonic Corporation')
+        for model, expected in [('CFSV7-3L', 27), ('CF-SV7HD9VS', 27), ('CFSV8-1', None)]:
+            (dmi/'product_name').write_text(model)
+            self.assertEqual(detect(self.supplies, self.typec, dmi=dmi).get('charging_minimum_w'), expected)
+        (dmi/'product_name').write_text('CFSV7-3L')
+        (dmi/'sys_vendor').write_text('Other')
+        self.assertNotIn('charging_minimum_w', detect(self.supplies, self.typec, dmi=dmi))
+
     def test_stale_contract_ignored_on_unplug(self):
         self.contract('0')
         result = detect(self.supplies, self.typec)

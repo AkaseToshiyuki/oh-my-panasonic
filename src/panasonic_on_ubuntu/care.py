@@ -329,8 +329,11 @@ def run():
                     actual_mode=read(FIRMWARE/'mode')
                     driver=int(actual_mode) if actual_mode in ('0','1','2') else None
                 log.warning('%s',error)
+            label = PHASES.get(policy.phase, policy.phase)
+            if policy.phase == 'charging' and data.get('status') != 'Charging':
+                label = '等待充电'
             output={'timestamp':now,'config':{k:config[k] for k in DEFAULT},'phase':policy.phase,
-                    'label':PHASES.get(policy.phase,policy.phase),'error':error,'note':policy.reason,
+                    'label':label,'error':error,'note':policy.reason,
                     'request_id':policy.state.get('request_id'),'driver_mode':driver,'sample':data,
                     'override_until':policy.state.get('override_until'),
                     'departure_prediction':data.get('departure_prediction'),

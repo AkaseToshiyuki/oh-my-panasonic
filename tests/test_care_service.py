@@ -9,7 +9,7 @@ from panasonic_on_ubuntu import care
 
 
 class ServiceTest(unittest.TestCase):
-    def exercise(self, *, supported=True, mode='care', charging=False, recovery_failure=False):
+    def exercise(self, *, supported=True, mode='care', charging=False, recovery_failure=False, capacity=90):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             locations={name:root/name for name in ('CONFIG','STATE','RUNTIME','FIRMWARE','SUPPLIES','LOG_DIR')}
@@ -20,7 +20,7 @@ class ServiceTest(unittest.TestCase):
             supplies=locations['SUPPLIES']
             (supplies/'BAT1').mkdir(parents=True); (supplies/'AC').mkdir()
             (supplies/'AC/online').write_text('1')
-            fields={'CAPACITY':90,'PRESENT':1,'STATUS':'Charging' if charging else 'Not charging',
+            fields={'CAPACITY':capacity,'PRESENT':1,'STATUS':'Charging' if charging else 'Not charging',
                     'POWER_NOW':5000000 if charging else 0,'ENERGY_NOW':36000000}
             (supplies/'BAT1/uevent').write_text('\n'.join('POWER_SUPPLY_'+key+'='+str(value) for key,value in fields.items()))
             locations['CONFIG'].write_text(json.dumps({'mode':mode,'limit':80,'maintenance_days':0,'request_id':'test'}))
@@ -49,6 +49,12 @@ class ServiceTest(unittest.TestCase):
         self.assertTrue(all(x['phase']=='holding' and x['driver_mode']==1 and not x['error'] for x in observed))
         self.assertEqual(state['request_id'],'test')
         self.assertEqual(mode,'0')
+
+    def test_permitted_charge_is_not_presented_as_actual_charging(self):
+        for charging, label in [(False, '等待充电'), (True, '充电至保养上限')]:
+            observed, _, _ = self.exercise(charging=charging, capacity=75)
+            self.assertTrue(observed)
+            self.assertTrue(all(x['phase']=='charging' and x['driver_mode']==0 and x['label']==label for x in observed))
 
     def test_learning_storage_failure_does_not_release_charge_cap(self):
         with patch('panasonic_on_ubuntu.charge_habits.Habits.observe',side_effect=OSError('disk full')):

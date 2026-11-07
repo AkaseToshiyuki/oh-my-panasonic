@@ -1,4 +1,5 @@
 from pathlib import Path
+from copy import deepcopy
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -9,6 +10,31 @@ from panasonic_on_ubuntu.power_summary import describe
 
 
 class PowerPresentationTests(unittest.TestCase):
+    def test_low_pd_power_explains_waiting_without_overriding_battery_state(self):
+        snapshot = {'power_input':{'source':'typec', 'mains_online':False, 'charging_minimum_w':27,
+                                  'ports':[{'protocol':'PD', 'contract_w':20.04}]},
+                    'batteries':[{'fields':{'status':{'value':'Not charging'}, 'capacity':{'value':'75'}},
+                                  'metrics':{'battery_power_w':0}}]}
+        care = {'phase':'charging', 'driver_mode':0, 'config':{'mode':'care', 'limit':80}}
+        self.assertEqual(describe(snapshot, care)['status'], 'PD 供电不足，等待充电')
+        self.assertEqual(describe(snapshot, care)['power'], '')
+        for watts in (None, 0, 27, 45):
+            changed = deepcopy(snapshot)
+            changed['power_input']['ports'][0]['contract_w'] = watts
+            self.assertEqual(describe(changed, care)['status'], '等待充电')
+        for update in ({'source':'dc'}, {'mains_online':True}, {'charging_minimum_w':None}, {'ports':[]},
+                       {'ports':snapshot['power_input']['ports'] * 2}):
+            changed = deepcopy(snapshot)
+            changed['power_input'].update(update)
+            self.assertNotIn('PD 供电不足', describe(changed, care)['status'])
+        for update in ({'phase':'holding', 'driver_mode':1}, {'phase':'maintenance-pause', 'driver_mode':1},
+                       {'stale':True}, {'error':'I/O failure'}):
+            self.assertNotIn('PD 供电不足', describe(snapshot, {**care, **update})['status'])
+        for status in ('Charging', 'Discharging', 'Full'):
+            changed = deepcopy(snapshot)
+            changed['batteries'][0]['fields']['status']['value'] = status
+            self.assertNotIn('PD 供电不足', describe(changed, care)['status'])
+
     def summary(self, source, status, watts=None, target=100, **values):
         fields = {key:{'value':str(value)} for key,value in dict(values,status=status).items()}
         battery = {'fields':fields, 'metrics':{'battery_power_w':watts}}
