@@ -1,0 +1,35 @@
+[Unit]
+Description=Oh My Panasonic circular touchpad
+After=systemd-udevd.service
+ConditionPathExists=/etc/panasonic-on-ubuntu/enabled
+ConditionPathExists=/dev/input/pou-touchpad
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=notify
+User=pou-input
+Group=pou-input
+ExecStartPre=/usr/libexec/pou-input-check
+ExecStart=/usr/libexec/pou-wheelpad --config /etc/panasonic-on-ubuntu/wheelpad.toml --device /dev/input/pou-touchpad
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+WatchdogSec=10
+WatchdogSignal=SIGKILL
+TimeoutStartSec=30
+TimeoutStopSec=3
+RuntimeDirectory=pou-input
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+DevicePolicy=closed
+DeviceAllow=/dev/input/pou-touchpad rw
+DeviceAllow=/dev/uinput rw
+
+[Install]
+WantedBy=multi-user.target

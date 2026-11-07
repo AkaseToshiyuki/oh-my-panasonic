@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    systemd-sysusers /usr/lib/sysusers.d/pou-input.conf
+    systemctl daemon-reload
+    udevadm control --reload-rules || true
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+    systemctl enable --now pou-face-broker.socket
+    systemctl enable pou-power.service
+    /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.legacy_io import retire; retire()'
+    systemctl restart pou-power.service
+    systemctl enable pou-optical.service
+    systemctl restart pou-optical.service
+    systemctl enable pou-battery.service
+    /usr/bin/python3 -I -m panasonic_on_ubuntu.care upgrade-defaults
+    /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face import upgrade_hook; upgrade_hook()'
+    /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face_privilege import selected_services,edit_hooks; edit_hooks(True,selected_services())'
+    systemctl restart pou-battery.service
+    if [ -f /etc/panasonic-on-ubuntu/enabled ]; then
+        /usr/libexec/pou-control enable
+        systemctl restart pou-wheelpad.service
+    fi
+fi

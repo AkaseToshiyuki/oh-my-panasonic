@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Oh My Panasonic Indicator
+Name[zh_CN]=Oh My Panasonic 状态栏
+Comment=Battery status and quick controls
+Exec=pou tray-autostart
+TryExec=/usr/bin/pou
+Icon=pou-symbolic
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5

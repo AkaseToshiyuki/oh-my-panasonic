@@ -1,0 +1,21 @@
+.pou-body { width: 390px; padding: 12px; spacing: 10px; font-size: 14px; }
+.pou-scroll { max-height: 680px; }
+.pou-header { spacing: 10px; padding: 2px 0 8px; }
+.pou-title { font-weight: bold; font-size: 16px; }
+.pou-subtitle { color: #bfc3cc; font-size: 12px; }
+.pou-hero { font-size: 32px; font-weight: bold; color: #79d8c4; }
+.pou-reading { font-size: 23px; font-weight: bold; color: #79d8c4; }
+.pou-card { background-color: rgba(128,128,128,0.09); border-radius: 12px; padding: 12px; spacing: 8px; }
+.pou-row { padding: 8px 10px; border-radius: 9px; spacing: 10px; }
+.pou-row:hover, .pou-button:hover { background-color: rgba(128,128,128,0.20); }
+.pou-button { background-color: rgba(128,128,128,0.12); border-radius: 8px; padding: 8px 12px; }
+.pou-button:focus { box-shadow: inset 0 0 0 2px #79d8c4; }
+.pou-actions { spacing: 6px; }
+.pou-key { color: #bfc3cc; }
+.pou-value { font-weight: bold; }
+.pou-error { color: #ffb79f; font-size: 12px; }
+.pou-chart { height: 98px; }
+.pou-chart-axis { min-width: 40px; padding-right: 6px; }
+.pou-axis-label { font-size: 11px; }
+.pou-meter { height: 6px; }
+.pou-panel-box { spacing: 5px; }

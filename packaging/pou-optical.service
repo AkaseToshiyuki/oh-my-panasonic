@@ -1,0 +1,18 @@
+[Unit]
+Description=Oh My Panasonic verified optical-only drive power policy
+After=systemd-modules-load.service pou-firmware-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I -m panasonic_on_ubuntu.optical auto
+ExecStop=/usr/bin/python3 -I -m panasonic_on_ubuntu.optical on
+TimeoutStartSec=20
+TimeoutStopSec=20
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

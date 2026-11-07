@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+if [ "$1" = remove ] || [ "$1" = deconfigure ] || { [ "$1" = upgrade ] && dpkg --compare-versions "$2" lt 0.17.0; }; then
+    /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face_privilege import edit_hooks; edit_hooks(False)'
+    systemctl disable --now pou-face-broker.socket || true
+fi
+case "$1" in
+    remove|deconfigure)
+        /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face import PAM,edit_pam; edit_pam(False) if PAM.is_file() else None'
+        systemctl disable --now pou-battery.service || true
+        systemctl disable --now pou-optical.service || true
+        systemctl disable --now pou-power.service || true
+        /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.optical import supported,switch; switch("on") if supported() else None' || true
+        systemctl disable --now pou-wheelpad.service || true
+        for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {print $1}'); do
+            username=$(getent passwd "$uid" | cut -d: -f1)
+            if [ -n "$username" ] && [ -S "/run/user/$uid/bus" ]; then
+                runuser -u "$username" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user disable --now pou-monitor.timer || true
+                runuser -u "$username" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user stop pou-tray.service || true
+                runuser -u "$username" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" gnome-extensions disable panasonic-on-ubuntu@local || true
+            fi
+        done
+        ;;
+    upgrade)
+        if dpkg --compare-versions "$2" lt 0.16.2; then
+            /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face import upgrade_hook; upgrade_hook(rollback=True)'
+        fi
+        systemctl stop pou-optical.service pou-wheelpad.service pou-power.service pou-battery.service || true ;;
+esac

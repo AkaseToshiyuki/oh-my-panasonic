@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Oh My Panasonic
+Comment=Battery monitoring and circular touchpad settings
+Comment[zh_CN]=电池监控与圆形触控板设置
+Exec=pou gui
+Icon=pou-symbolic
+Terminal=false
+Categories=Settings;HardwareSettings;
+StartupNotify=true
+DBusActivatable=false
+Actions=ShowIndicator;
+
+[Desktop Action ShowIndicator]
+Name=Show status indicator
+Name[zh_CN]=显示状态栏
+Exec=pou tray

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oh-my-panasonic"
+version = "0.20.2"
+authors = [{name = "AkaseToshiyuki"}]
+maintainers = [{name = "AkaseToshiyuki"}]
+description = "Battery care, WheelPad and guarded hardware controls for Panasonic laptops"
+requires-python = ">=3.10"
+
+[project.scripts]
+pou = "panasonic_on_ubuntu.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

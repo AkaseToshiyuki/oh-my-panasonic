@@ -1,0 +1,305 @@
+#!/usr/bin/python3 -I
+"""Small root helper. Fixed actions, fixed paths; never evaluates shell input."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import uuid
+
+BASE = Path('/etc/panasonic-on-ubuntu')
+FIRMWARE = Path('/sys/devices/platform/pou-firmware')
+
+def run(*args):
+    subprocess.run(args, check=True, timeout=40)
+
+def atomic(name, text):
+    target = BASE / name
+    temp = BASE / (name + '.new')
+    # Directory is root owned and not writable by the caller.
+    with open(temp, 'w', encoding='utf-8') as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(temp, 0o644)
+    temp.replace(target)
+
+def configure(sensitivity, natural):
+    if sensitivity not in range(-2, 3) or natural not in (0, 1):
+        raise ValueError('Invalid touchpad setting')
+    atomic('wheelpad.json', json.dumps({'sensitivity': sensitivity, 'natural': bool(natural)}))
+    # SV7 ABS ranges 1210..5780 / 1250..4680; normalized radius is 2285.
+    atomic('wheelpad.toml', f'''device_name_regex = "^SynPS/2 Synaptics TouchPad$"
+[scroll]
+enable = true
+reverse_vertical = {str(bool(natural)).lower()}
+horizontal_enable = false
+sensitivity = {sensitivity}
+detect_area_width = 0
+detect_area_radius = 1830.0
+coordinate_y_scale = 1.332361516
+minimum_rotation_radius = 500.0
+[log]
+level = "info"
+''')
+
+def main():
+    if os.geteuid() != 0:
+        raise PermissionError('Use pkexec or sudo')
+    args = sys.argv[1:]
+    if not args or args[0] not in ('enable', 'disable', 'configure', 'profile', 'fan', 'fan-control', 'fan-restore', 'wifi', 'bluetooth', 'cpu', 'optical', 'peripherals', 'io-limit', 'ssd-power', 'battery', 'battery-limit', 'battery-interval'):
+        raise ValueError('Unknown action')
+    if len(args) != {'configure': 3, 'profile': 2, 'fan': 2, 'fan-control': 2, 'wifi': 2, 'bluetooth': 2, 'cpu': 2, 'optical': 2, 'peripherals':2, 'io-limit':2, 'ssd-power':2, 'battery':2, 'battery-limit':2, 'battery-interval':2}.get(args[0], 1):
+        raise ValueError('Unexpected arguments')
+    if args[0] == 'fan-control' or (args[0] == 'fan' and (FIRMWARE / 'fan_pwm').exists()):
+        from panasonic_on_ubuntu.fan import configuration, validate
+        import socket
+        import time
+        if args[0] == 'fan':
+            mode = {'restore': 'follow', 'quiet': 'quiet', 'standard': 'standard', 'performance': 'performance'}.get(args[1])
+            patch = {'mode': mode}
+        else:
+            if len(args[1]) > 400:
+                raise ValueError('风扇配置过长')
+            patch = json.loads(args[1])
+        if not isinstance(patch, dict) or not patch or patch.keys() - {'mode', 'percent', 'response', 'curve'}:
+            raise ValueError('风扇设置无效')
+        BASE.mkdir(mode=0o755, exist_ok=True)
+        with open('/run/lock/pou-control.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            data = validate({**configuration(), **patch})
+            if data['mode'] != 'follow':
+                int((FIRMWARE / 'fan_feedback_percent').read_text())
+            data['request_id'] = uuid.uuid4().hex
+            atomic('fan-control.json', json.dumps(data))
+            run('/usr/bin/systemctl', 'start', 'pou-power.service')
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as wake:
+                wake.settimeout(.2)
+                try: wake.sendto(b'fan', '/run/panasonic-on-ubuntu/power-wakeup.sock')
+                except OSError: pass
+            for _ in range(70):
+                time.sleep(.1)
+                try:
+                    state = json.loads(Path('/run/panasonic-on-ubuntu/power.json').read_text())['fan']
+                except (OSError, ValueError, KeyError):
+                    continue
+                if state.get('request_id') == data['request_id']:
+                    if state.get('error'):
+                        raise RuntimeError(state['error'])
+                    return
+            raise RuntimeError('风扇服务未确认此设置')
+    if args[0] in ('battery', 'battery-limit', 'battery-interval'):
+        from panasonic_on_ubuntu.care import CONFIG, DEFAULT, FIRMWARE as BATTERY_FW, RUNTIME, config_valid, load, read
+        if read(BATTERY_FW/'interface_version') != '1' and args != ['battery','system']:
+            raise RuntimeError('本机没有已验证的电池控制模块')
+        BASE.mkdir(mode=0o755, exist_ok=True)
+        with open('/run/lock/pou-battery-control.lock','w') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            config=config_valid(load(CONFIG,DEFAULT))
+            config['action']='configure'
+            if args[0]=='battery-limit':
+                config.update(limit=int(args[1]),mode='care',action='limit')
+            elif args[0]=='battery-interval':
+                config['maintenance_days']=int(args[1])
+            elif args[1] in ('system','care'):
+                config['mode']=args[1]
+            elif args[1] in ('sleep-on','sleep-off','poweroff-on','poweroff-off'):
+                kind, enabled = args[1].split('-')
+                bit = 1 if kind == 'sleep' else 2
+                if not int(read(BATTERY_FW/'offline_capabilities') or 0) & bit:
+                    raise ValueError('当前充电控制不可用')
+                config[kind+'_hold'] = enabled=='on'
+            elif args[1] in ('full','cancel-full','maintain','cancel-maintenance'):
+                config.update(mode='care',action=args[1])
+            else:raise ValueError('Invalid battery action')
+            config=config_valid(config)
+            request_id=uuid.uuid4().hex; config['request_id']=request_id
+            atomic('battery-care.json',json.dumps(config))
+            import socket
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as wake:
+                    wake.settimeout(.2)
+                    wake.sendto(b'w', '/run/panasonic-on-ubuntu/battery-wakeup.sock')
+            except OSError:
+                run('/usr/bin/systemctl','reload-or-restart','pou-battery.service')
+            import time
+            # Charging-current notifications can lag the EC acknowledgement.
+            # Wait through the service's verification window before reporting
+            # a successful hold to the user.
+            deadline = time.monotonic() + 32
+            while time.monotonic() < deadline:
+                state=load(RUNTIME,{})
+                if state.get('request_id')==request_id and state.get('error') and time.time()-state.get('timestamp',0)<10:
+                    raise RuntimeError(state['error'])
+                if state.get('request_id')==request_id and time.time()-state.get('timestamp',0)<10:
+                    if args[0]=='battery-limit' or state.get('phase')!='holding-pending':
+                        return
+                time.sleep(.025 if state.get('request_id')!=request_id else .2)
+            raise RuntimeError('电池策略未得到服务确认')
+        return
+    if args[0]=='io-limit':
+        raise ValueError('磁盘限速已移除，请打开新版面板；重新登录可刷新状态栏')
+    if args[0]=='ssd-power':
+        from panasonic_on_ubuntu import ssd_power
+        if args[1] not in ssd_power.MODES:raise ValueError('SSD 电源策略无效')
+        BASE.mkdir(mode=0o755, exist_ok=True)
+        with open('/run/lock/pou-control.lock','w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            request_id=uuid.uuid4().hex
+            atomic('ssd-power.json', json.dumps({'mode':args[1], 'request_id':request_id}))
+            run('/usr/bin/systemctl','start','pou-power.service')
+            import socket,time
+            with socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM) as wake:
+                wake.settimeout(.15)
+                try: wake.sendto(b'ssd', '/run/panasonic-on-ubuntu/power-wakeup.sock')
+                except OSError: pass
+            for _ in range(100):
+                result=ssd_power.status()
+                if result.get('request_id')==request_id and not result.get('stale'):
+                    if result.get('error'):raise RuntimeError(result['error'])
+                    print(json.dumps(result));return
+                time.sleep(.1)
+            raise RuntimeError('SSD 电源设置未得到服务确认')
+    if args[0]=='peripherals':
+        if args[1] not in ('follow','system','save','performance'):raise ValueError('Invalid peripheral policy')
+        BASE.mkdir(mode=0o755,exist_ok=True)
+        with open('/run/lock/pou-control.lock','w') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            atomic('peripherals.json',json.dumps({'mode':args[1]}))
+            run('/usr/bin/systemctl','start','pou-power.service')
+            import time
+            for _ in range(12):
+                time.sleep(1)
+                try:
+                    state=json.loads(Path('/run/panasonic-on-ubuntu/peripherals.json').read_text())
+                    if state.get('requested')==args[1] and time.time()-state['timestamp']<6:
+                        if state.get('error'):raise RuntimeError(state['error'])
+                        return
+                except (FileNotFoundError,json.JSONDecodeError):pass
+            raise RuntimeError('外设策略未得到服务确认')
+    if args[0] in ('wifi', 'bluetooth'):
+        if args[1] not in ('on', 'off'):
+            raise ValueError('Invalid radio state')
+        env = {**os.environ, 'LC_ALL': 'C'}
+        if args[0] == 'wifi':
+            result = subprocess.run(['/usr/bin/nmcli', 'radio', 'wifi', args[1]], capture_output=True, text=True, timeout=15, env=env)
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip() or 'Wi-Fi 开关失败')
+            state = subprocess.check_output(['/usr/bin/nmcli', '-t', '-f', 'WIFI', 'radio'], text=True, timeout=5, env=env).strip()
+            if state != ('enabled' if args[1] == 'on' else 'disabled'):
+                raise RuntimeError('Wi-Fi 状态未生效，请检查无线硬件开关。')
+        else:
+            if args[1] == 'on':
+                run('/usr/sbin/rfkill', 'unblock', 'bluetooth')
+            result = subprocess.run(['/usr/bin/bluetoothctl', '--timeout', '10', 'power', args[1]], capture_output=True, text=True, timeout=15, env=env)
+            state = subprocess.check_output(['/usr/bin/bluetoothctl', 'show'], text=True, timeout=5, env=env)
+            if ('Powered: ' + ('yes' if args[1] == 'on' else 'no')) not in state:
+                raise RuntimeError('蓝牙状态未生效：' + (result.stderr.strip() or result.stdout.strip() or '请检查无线硬件开关和适配器。'))
+        return
+    if args[0] == 'optical':
+        if args[1] not in ('on', 'off', 'auto'):
+            raise ValueError('Invalid optical policy')
+        from panasonic_on_ubuntu.optical import switch
+        BASE.mkdir(mode=0o755, exist_ok=True)
+        with open('/run/lock/pou-control.lock','w') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            switch('on' if args[1] == 'on' else 'off')
+            atomic('optical.json', json.dumps({'policy': 'on' if args[1] == 'on' else 'auto'}))
+            run('/usr/bin/systemctl','start','pou-optical.service')
+        return
+    if args[0] == 'cpu':
+        if args[1] == 'thermal':
+            raise RuntimeError('EC 解限温控档正在排查稳定性问题，暂时停用；可使用标准性能档。')
+        if args[1] not in ('system', 'eco', 'balanced', 'performance', 'adaptive', 'boost'):
+            raise ValueError('Invalid CPU preset')
+        BASE.mkdir(mode=0o755, exist_ok=True)
+        with open('/run/lock/pou-control.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            request_id = uuid.uuid4().hex
+            atomic('power.json', json.dumps({'mode': args[1], 'request_id': request_id}))
+            run('/usr/bin/systemctl', 'start', 'pou-power.service')
+            import time
+            import socket
+            with socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM) as wake:
+                wake.settimeout(0.15)
+                try: wake.sendto(b'config','/run/panasonic-on-ubuntu/power-wakeup.sock')
+                except OSError: pass  # Older services poll the same persisted request.
+            for _ in range(120):
+                time.sleep(0.1)
+                try:
+                    data = json.loads(Path('/run/panasonic-on-ubuntu/power.json').read_text())
+                    if data.get('request_id') != request_id:
+                        continue
+                    if data['mode'] == args[1] and time.time() - data['timestamp'] < 5:
+                        print(json.dumps({**data, 'stale': not data.get('sample')}))
+                        return
+                    if data.get('error'):
+                        raise RuntimeError(data['error'])
+                except (FileNotFoundError, json.JSONDecodeError):
+                    pass
+            raise RuntimeError('CPU 预设未得到服务确认')
+    if args[0] == 'profile':
+        if args[1] not in ('power-saver', 'balanced', 'performance'):
+            raise ValueError('Invalid power profile')
+        if Path('/run/panasonic-on-ubuntu/baseline.json').exists():
+            raise RuntimeError('请先将 CPU 高级预设恢复为“系统管理”，再单独切换系统电源模式。')
+        from panasonic_on_ubuntu import power_profiles
+        power_profiles.set_active(args[1])
+        current = power_profiles.get_active()
+        if current != args[1]:
+            raise RuntimeError('Power profile readback mismatch')
+        return
+    # Disabling is always possible, including after an unsupported hardware move.
+    if args[0] != 'disable' and Path('/sys/class/dmi/id/product_name').read_text().strip() != 'CFSV7-3L':
+        raise ValueError('This WheelPad profile is validated only for CFSV7-3L')
+    BASE.mkdir(mode=0o755, exist_ok=True)
+    with open('/run/lock/pou-control.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if args[0] in ('fan', 'fan-restore'):
+            if Path('/run/panasonic-on-ubuntu/baseline.json').exists():
+                raise RuntimeError('当前风扇由 CPU 预设管理，请先恢复“系统管理”。')
+            if args[0] == 'fan-restore':
+                value = json.loads((BASE / 'fan.json').read_text())['profile']
+            elif args[1] == 'restore':
+                value = int((FIRMWARE / 'original_fan_profile').read_text())
+            else:
+                value = {'standard': 0, 'quiet': 1}.get(args[1], -1)
+            if type(value) is not int or value not in (0, 1):
+                raise ValueError('Invalid fan profile')
+            (FIRMWARE / 'fan_profile').write_text(str(value) + '\n')
+            if int((FIRMWARE / 'fan_profile').read_text()) != value:
+                raise RuntimeError('Firmware fan profile readback mismatch')
+            if args[0] == 'fan' and args[1] == 'restore':
+                (BASE / 'fan.json').unlink(missing_ok=True)
+            elif args[0] == 'fan':
+                atomic('fan.json', json.dumps({'profile': value}))
+        elif args[0] == 'disable':
+            (BASE / 'enabled').unlink(missing_ok=True)
+            run('/usr/bin/systemctl', 'disable', '--now', 'pou-wheelpad.service')
+        elif args[0] == 'enable':
+            if not (BASE / 'wheelpad.toml').exists():
+                configure(0, 1)
+            atomic('enabled', '1\n')
+            run('/usr/sbin/modprobe', 'uinput')
+            run('/usr/bin/udevadm', 'control', '--reload-rules')
+            run('/usr/bin/udevadm', 'trigger', '--subsystem-match=input')
+            run('/usr/bin/udevadm', 'trigger', '--subsystem-match=misc', '--sysname-match=uinput')
+            run('/usr/bin/udevadm', 'settle', '--timeout=10')
+            try:
+                run('/usr/bin/systemctl', 'enable', '--now', 'pou-wheelpad.service')
+            except Exception:
+                (BASE / 'enabled').unlink(missing_ok=True)
+                run('/usr/bin/systemctl', 'disable', '--now', 'pou-wheelpad.service')
+                raise
+        else:
+            configure(int(args[1]), int(args[2]))
+            if (BASE / 'enabled').exists():
+                run('/usr/bin/systemctl', 'reload-or-restart', 'pou-wheelpad.service')
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)

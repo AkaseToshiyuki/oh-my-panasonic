@@ -1,0 +1,384 @@
+diff --git a/crates/facelock-cli/src/bin/pou-face-gpu.rs b/crates/facelock-cli/src/bin/pou-face-gpu.rs
+new file mode 100644
+index 0000000..87a5206
+--- /dev/null
++++ b/crates/facelock-cli/src/bin/pou-face-gpu.rs
+@@ -0,0 +1,8 @@
++fn main() {
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    if unsafe { libc::geteuid() } != 0 || args.len() != 3 || args[0] != "auth" || args[1] != "-u" {
++        std::process::exit(2);
++    }
++    let code = facelock_cli::commands::auth::run(args[2].clone(), None, 0);
++    std::process::exit(code);
++}
+diff --git a/crates/facelock-cli/src/commands/auth.rs b/crates/facelock-cli/src/commands/auth.rs
+index a9d6ce5..d4f08fa 100644
+--- a/crates/facelock-cli/src/commands/auth.rs
++++ b/crates/facelock-cli/src/commands/auth.rs
+@@ -94,7 +94,7 @@ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
+     // `create`: on a genuinely fresh install this is what brings the
+     // rate-limiter's storage into being, so switching to `open_existing` would
+     // change auth-path behaviour, not harden it.
+-    let store = match FaceStore::create(Path::new(&config.storage.db_path)) {
++    let mut store = match FaceStore::create(Path::new(&config.storage.db_path)) {
+         Ok(s) => s,
+         Err(e) => {
+             error!("database: {e}");
+@@ -237,35 +237,32 @@ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
+
+     // Negotiation may drift from the preflight FourCC. Do not let warmup
+     // capture precede the auth loop's stable unverified-Y16 rejection.
+-    if camera.capabilities().ir_texture_scale != facelock_core::types::IrTextureScale::UnverifiedY16
+-    {
+-        for _ in 0..warmup {
+-            if cancel.is_cancelled() {
+-                info!(user = %user, "cancelled");
+-                return 2;
++    // Both operations start after the camera is open and the original preflight has passed.
++    // Keep the TPM per attempt. A cancelled request joins the reader and wipes its result.
++    let stored = std::thread::scope(|scope| {
++        let db = &mut store;
++        let cfg = &config;
++        let account = &user;
++        let templates = scope.spawn(move || crate::direct::load_user_embeddings(db, cfg, account));
++        if camera.capabilities().ir_texture_scale != facelock_core::types::IrTextureScale::UnverifiedY16 {
++            for _ in 0..warmup {
++                if cancel.is_cancelled() { break; }
++                let _ = camera.capture();
+             }
+-            let _ = camera.capture();
+         }
+-    }
+-
+-    // Load embeddings through the decryption-aware path so the oneshot binary
+-    // handles encrypted templates (encrypt-by-default, Plan 04) — the bare
+-    // `auth::authenticate` helper reads plaintext only.
+-    //
+-    // A failed load is a storage fault, not evidence about the face: the
+-    // first failing row fails the whole load (see facelock-daemon's
+-    // embeddings module), so a TPM unseal broken by rotated PCRs lands here
+-    // on every attempt. Exit 1 is frozen as "scanned and not matched" and
+-    // would fail a `required` stack against the correct password — a
+-    // lockout, not a fallback. Exit under the storage class (2, PAM_IGNORE),
+-    // matching the daemon handler's `-2` storage reply for the same failure.
+-    let mut stored = match crate::direct::load_user_embeddings(&store, &config, &user) {
+-        Ok(v) => v,
++        templates.join().map_err(|_| anyhow::anyhow!("template worker exited")).and_then(|v| v)
++    });
++    let mut stored = match stored {
++        Ok(rows) => rows,
+         Err(e) => {
+             error!(user = %user, "failed to load embeddings: {e}");
+             return oneshot_exit_code(ErrorKind::Storage);
+         }
+     };
++    if cancel.is_cancelled() {
++        facelock_core::types::zeroize_stored_embeddings(&mut stored);
++        return 2;
++    }
+
+     let start = std::time::Instant::now();
+     // Wipes `stored` (D11): nothing below may read the plaintext set again.
+diff --git a/crates/facelock-face/src/detector.rs b/crates/facelock-face/src/detector.rs
+index 4c351ee..56ded50 100644
+--- a/crates/facelock-face/src/detector.rs
++++ b/crates/facelock-face/src/detector.rs
+@@ -1,17 +1,10 @@
+-use std::mem::ManuallyDrop;
+ use std::path::Path;
+
+ use facelock_core::error::{FacelockError, Result};
+ use facelock_core::types::{BoundingBox, Detection, Frame, Point2D};
+-use ort::session::Session;
+-use ort::session::builder::GraphOptimizationLevel;
+-use ort::value::Tensor;
+
+ pub struct FaceDetector {
+-    // ManuallyDrop: ORT's Session destructor corrupts the heap on process exit
+-    // when the global ORT environment is torn down before sessions. Leaking the
+-    // session is safe — the OS reclaims all memory on exit anyway.
+-    session: ManuallyDrop<Session>,
++    session: crate::native::Network,
+     input_width: u32,
+     input_height: u32,
+     confidence_threshold: f32,
+@@ -32,34 +25,9 @@ impl FaceDetector {
+         threads: u32,
+         execution_provider: &str,
+     ) -> Result<Self> {
+-        crate::provider::ensure_runtime_loaded(execution_provider)
+-            .map_err(|e| FacelockError::Detection(format!("Failed to load ONNX Runtime: {e}")))?;
+-
+-        let builder = Session::builder()
+-            .map_err(|e| {
+-                FacelockError::Detection(format!("Failed to create session builder: {e}"))
+-            })?
+-            .with_optimization_level(GraphOptimizationLevel::All)
+-            .map_err(|e| {
+-                FacelockError::Detection(format!("Failed to set optimization level: {e}"))
+-            })?
+-            .with_intra_threads(threads as usize)
+-            .map_err(|e| FacelockError::Detection(format!("Failed to set intra threads: {e}")))?;
+-
+-        let mut builder = crate::provider::register_execution_provider(builder, execution_provider)
+-            .map_err(|e| {
+-                FacelockError::Detection(format!("Failed to set execution provider: {e}"))
+-            })?;
+-
+-        let session = builder.commit_from_file(model_path).map_err(|e| {
+-            FacelockError::Detection(format!(
+-                "Failed to load model {}: {e}",
+-                model_path.display()
+-            ))
+-        })?;
+-
++        let session=crate::native::Network::load(model_path,640,execution_provider)?;
+         Ok(Self {
+-            session: ManuallyDrop::new(session),
++            session,
+             input_width: 640,
+             input_height: 640,
+             confidence_threshold: confidence,
+@@ -72,15 +40,7 @@ impl FaceDetector {
+         let (tensor_data, scale, pad_x, pad_y) =
+             letterbox(&frame.rgb, frame.width, frame.height, self.input_width);
+
+-        let shape = [1i64, 3, self.input_height as i64, self.input_width as i64];
+-        let input_value = Tensor::from_array((shape.as_slice(), tensor_data.into_boxed_slice()))
+-            .map_err(|e| FacelockError::Detection(format!("Failed to create input tensor: {e}")))?;
+-
+-        let outputs = self
+-            .session
+-            .run(ort::inputs![input_value])
+-            .map_err(|e| FacelockError::Detection(format!("Inference failed: {e}")))?;
+-
++        let outputs=self.session.run(&tensor_data)?;
+         let mut detections = Vec::new();
+
+         // SCRFD outputs 9 tensors: 3 strides x (scores, bboxes, landmarks)
+@@ -90,21 +50,9 @@ impl FaceDetector {
+             let bbox_idx = stride_idx + 3;
+             let kps_idx = stride_idx + 6;
+
+-            let (_score_shape, scores) =
+-                outputs[score_idx]
+-                    .try_extract_tensor::<f32>()
+-                    .map_err(|e| {
+-                        FacelockError::Detection(format!("Failed to extract scores tensor: {e}"))
+-                    })?;
+-            let (_bbox_shape, bboxes) =
+-                outputs[bbox_idx].try_extract_tensor::<f32>().map_err(|e| {
+-                    FacelockError::Detection(format!("Failed to extract bbox tensor: {e}"))
+-                })?;
+-            let (_kps_shape, landmarks_data) =
+-                outputs[kps_idx].try_extract_tensor::<f32>().map_err(|e| {
+-                    FacelockError::Detection(format!("Failed to extract landmarks tensor: {e}"))
+-                })?;
+-
++            let scores=&outputs[score_idx];
++            let bboxes=&outputs[bbox_idx];
++            let landmarks_data=&outputs[kps_idx];
+             let feat_h = self.input_height / stride;
+             let feat_w = self.input_width / stride;
+             let anchors = generate_anchors(feat_h, feat_w, stride);
+@@ -442,3 +390,4 @@ mod tests {
+         );
+     }
+ }
++
+diff --git a/crates/facelock-face/src/embedder.rs b/crates/facelock-face/src/embedder.rs
+index 1fccb3b..b2eb725 100644
+--- a/crates/facelock-face/src/embedder.rs
++++ b/crates/facelock-face/src/embedder.rs
+@@ -1,17 +1,12 @@
+-use std::mem::ManuallyDrop;
+ use std::path::Path;
+
+ use facelock_core::error::{FacelockError, Result};
+ use facelock_core::types::FaceEmbedding;
+-use ort::session::Session;
+-use ort::session::builder::GraphOptimizationLevel;
+-use ort::value::Tensor;
+
+ use crate::align::AlignedFace;
+
+ pub struct FaceEmbedder {
+-    // ManuallyDrop: see FaceDetector comment — avoids ORT heap corruption on exit.
+-    session: ManuallyDrop<Session>,
++    session: crate::native::Network,
+ }
+
+ impl FaceEmbedder {
+@@ -19,34 +14,9 @@ impl FaceEmbedder {
+     ///
+     /// `threads` controls the number of intra-op threads for ORT inference.
+     pub fn load(model_path: &Path, threads: u32, execution_provider: &str) -> Result<Self> {
+-        crate::provider::ensure_runtime_loaded(execution_provider)
+-            .map_err(|e| FacelockError::Embedding(format!("Failed to load ONNX Runtime: {e}")))?;
+-
+-        let builder = Session::builder()
+-            .map_err(|e| {
+-                FacelockError::Embedding(format!("Failed to create session builder: {e}"))
+-            })?
+-            .with_optimization_level(GraphOptimizationLevel::All)
+-            .map_err(|e| {
+-                FacelockError::Embedding(format!("Failed to set optimization level: {e}"))
+-            })?
+-            .with_intra_threads(threads as usize)
+-            .map_err(|e| FacelockError::Embedding(format!("Failed to set intra threads: {e}")))?;
+-
+-        let mut builder = crate::provider::register_execution_provider(builder, execution_provider)
+-            .map_err(|e| {
+-                FacelockError::Embedding(format!("Failed to set execution provider: {e}"))
+-            })?;
+-
+-        let session = builder.commit_from_file(model_path).map_err(|e| {
+-            FacelockError::Embedding(format!(
+-                "Failed to load model {}: {e}",
+-                model_path.display()
+-            ))
+-        })?;
+-
++        let session=crate::native::Network::load(model_path,112,execution_provider)?;
+         Ok(Self {
+-            session: ManuallyDrop::new(session),
++            session,
+         })
+     }
+
+@@ -68,19 +38,8 @@ impl FaceEmbedder {
+             }
+         }
+
+-        let shape = [1i64, channels as i64, h as i64, w as i64];
+-        let input_value = Tensor::from_array((shape.as_slice(), data.into_boxed_slice()))
+-            .map_err(|e| FacelockError::Embedding(format!("Failed to create input tensor: {e}")))?;
+-
+-        let outputs = self
+-            .session
+-            .run(ort::inputs![input_value])
+-            .map_err(|e| FacelockError::Embedding(format!("Inference failed: {e}")))?;
+-
+-        let (_shape, embedding_data) = outputs[0]
+-            .try_extract_tensor::<f32>()
+-            .map_err(|e| FacelockError::Embedding(format!("Failed to extract embedding: {e}")))?;
+-
++        let output=self.session.run(&data)?;
++        let embedding_data=&output[0];
+         let mut embedding: FaceEmbedding = [0.0f32; 512];
+         for (i, val) in embedding.iter_mut().enumerate() {
+             *val = embedding_data[i];
+@@ -136,3 +95,4 @@ mod tests {
+         );
+     }
+ }
++
+diff --git a/crates/facelock-face/src/lib.rs b/crates/facelock-face/src/lib.rs
+index 621b3c0..f9a0cc7 100644
+--- a/crates/facelock-face/src/lib.rs
++++ b/crates/facelock-face/src/lib.rs
+@@ -1,3 +1,4 @@
++mod native;
+ pub mod align;
+ pub mod detector;
+ pub mod embedder;
+@@ -41,7 +42,8 @@ impl FaceEngine {
+             config.embedder_sha256.as_deref(),
+         )?;
+
+-        if !verify_model(&detector_path, &detector_sha256)? {
++        // Network::load verifies this exact original digest and the compiled artifact.
++        if detector_sha256 != "bc24bb349491481c3ca793cf89306723162c280cb284c5a5e49df3760bf5c2ce" {
+             return Err(FacelockError::Detection(format!(
+                 "Model integrity check failed for {}. Expected SHA256: {}. \
+                  Re-run `facelock setup` to re-download or update the configured checksum.",
+@@ -49,7 +51,8 @@ impl FaceEngine {
+             )));
+         }
+
+-        if !verify_model(&embedder_path, &embedder_sha256)? {
++        // Network::load verifies this exact original digest and the compiled artifact.
++        if embedder_sha256 != "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43" {
+             return Err(FacelockError::Detection(format!(
+                 "Model integrity check failed for {}. Expected SHA256: {}. \
+                  Re-run `facelock setup` to re-download or update the configured checksum.",
+diff --git a/crates/facelock-face/src/native.rs b/crates/facelock-face/src/native.rs
+new file mode 100644
+index 0000000..97d9bdb
+--- /dev/null
++++ b/crates/facelock-face/src/native.rs
+@@ -0,0 +1,73 @@
++use facelock_core::{FacelockError, Result};
++use std::{
++    ffi::{CString, c_char, c_int, c_void},
++    os::unix::ffi::OsStrExt,
++    path::Path,
++    ptr::NonNull,
++};
++#[link(name = "pou_ov")]
++unsafe extern "C" {
++    fn pou_ov_create(path: *const c_char, side: c_int) -> *mut c_void;
++    fn pou_ov_destroy(network: *mut c_void);
++    fn pou_ov_run(network: *mut c_void, input: *const f32, len: usize) -> c_int;
++    fn pou_ov_output(network: *mut c_void, index: usize, len: *mut usize) -> *const f32;
++}
++pub(crate) struct Network {
++    handle: NonNull<c_void>,
++    side: u32,
++}
++// Inference requires &mut self. A network can move to the auth engine's sole owner.
++unsafe impl Send for Network {}
++impl Network {
++    pub(crate) fn load(path: &Path, side: u32, provider: &str) -> Result<Self> {
++        if provider != "openvino" && provider != "cpu" {
++            return Err(FacelockError::Detection(
++                "Dedicated GPU backend expects OpenVINO".into(),
++            ));
++        }
++        let name = CString::new(path.as_os_str().as_bytes())
++            .map_err(|_| FacelockError::Detection("Invalid model path".into()))?;
++        let handle = NonNull::new(unsafe { pou_ov_create(name.as_ptr(), side as c_int) })
++            .ok_or_else(|| FacelockError::Detection("OpenVINO GPU load failed".into()))?;
++        Ok(Self { handle, side })
++    }
++    pub(crate) fn run(&mut self, input: &[f32]) -> Result<Vec<Vec<f32>>> {
++        let count = unsafe { pou_ov_run(self.handle.as_ptr(), input.as_ptr(), input.len()) };
++        let expected = if self.side == 112 {
++            vec![512]
++        } else {
++            [1, 4, 10]
++                .into_iter()
++                .flat_map(|attributes| {
++                    [8, 16, 32]
++                        .map(|stride| ((640 / stride) * (640 / stride) * 2 * attributes) as usize)
++                })
++                .collect()
++        };
++        if count != expected.len() as i32 {
++            return Err(FacelockError::Detection("OpenVINO output count".into()));
++        }
++        let mut result = Vec::with_capacity(expected.len());
++        for (i, size) in expected.into_iter().enumerate() {
++            let mut len = 0;
++            let ptr = unsafe { pou_ov_output(self.handle.as_ptr(), i, &mut len) };
++            if ptr.is_null() || len != size {
++                return Err(FacelockError::Detection(format!(
++                    "OpenVINO output {i} size {len}, expected {size}"
++                )));
++            }
++            // Owned copy before the next inference can reuse the request's buffer.
++            let values = unsafe { std::slice::from_raw_parts(ptr, len) };
++            if !values.iter().all(|v| v.is_finite()) {
++                return Err(FacelockError::Detection("Invalid OpenVINO output".into()));
++            }
++            result.push(values.to_vec());
++        }
++        Ok(result)
++    }
++}
++impl Drop for Network {
++    fn drop(&mut self) {
++        unsafe { pou_ov_destroy(self.handle.as_ptr()) }
++    }
++}

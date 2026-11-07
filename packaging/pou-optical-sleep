@@ -1,0 +1,6 @@
+#!/bin/sh
+# Complete ATA registration before sleep; apply the user's policy after wake.
+case "$1" in
+    pre) timeout 15s /usr/bin/python3 -I -m panasonic_on_ubuntu.optical on ;;
+    post) timeout 25s /usr/bin/python3 -I -m panasonic_on_ubuntu.optical resume ;;
+esac

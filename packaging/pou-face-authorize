@@ -1,0 +1,7 @@
+#!/usr/bin/python3 -I
+from panasonic_on_ubuntu.face_privilege import authorize
+try:
+    allowed = authorize()
+except Exception:
+    allowed = False
+raise SystemExit(0 if allowed else 1)

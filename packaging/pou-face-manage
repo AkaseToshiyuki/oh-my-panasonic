@@ -1,0 +1,13 @@
+#!/usr/bin/python3 -I
+import subprocess
+import sys
+from panasonic_on_ubuntu.face import manage
+try:
+    if len(sys.argv) != 2:
+        raise ValueError('未知操作')
+    manage(sys.argv[1])
+except (subprocess.SubprocessError, OSError, ValueError, RuntimeError, KeyError) as error:
+    if isinstance(error, subprocess.CalledProcessError):
+        error = error.stderr.strip().splitlines()[-1] if error.stderr.strip() else '录入或验证未完成。'
+    print(str(error),file=sys.stderr)
+    raise SystemExit(1)

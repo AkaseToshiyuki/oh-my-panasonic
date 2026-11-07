@@ -1,0 +1,8 @@
+[Unit]
+Description=Oh My Panasonic compatible status indicator
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/pou tray-process
+Restart=on-failure
+RestartSec=3

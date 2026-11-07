@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<policyconfig>
+  <action id="io.github.panasonic_on_ubuntu.face">
+    <description>Manage your local face unlock</description>
+    <message>Authenticate to change face unlock for your account</message>
+    <message xml:lang="zh_CN">验证本机账户以管理人脸解锁</message>
+    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_self</allow_active></defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pou-face-manage</annotate>
+  </action>
+</policyconfig>

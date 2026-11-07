@@ -1,0 +1,18 @@
+#!/bin/sh
+# Restore owned limits before kernel PM snapshots them; reacquire after wake.
+state=/run/panasonic-on-ubuntu/power-resume
+case "$1" in
+    pre)
+        rm -f -- "$state"
+        if systemctl is-active --quiet pou-power.service; then
+            install -m 600 /dev/null "$state"
+            timeout 20s systemctl stop pou-power.service
+        fi
+        ;;
+    post)
+        if [ -f "$state" ]; then
+            rm -f -- "$state"
+            timeout 20s systemctl start pou-power.service
+        fi
+        ;;
+esac

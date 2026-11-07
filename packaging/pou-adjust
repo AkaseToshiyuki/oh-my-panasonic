@@ -1,0 +1,39 @@
+#!/usr/bin/python3 -I
+"""Narrow entry point for the interactive sliders and two battery actions."""
+import json
+import os
+import sys
+
+
+def integer(text, low, high):
+    value = int(text)
+    if not low <= value <= high:
+        raise ValueError('数值超出范围')
+    return value
+
+
+def arguments(args):
+    match args:
+        case ['battery-limit', level]:
+            return ['battery-limit', str(integer(level, 50, 100))]
+        case ['battery', ('full' | 'system') as mode]:
+            return ['battery', mode]
+        case ['fan-percent', level]:
+            value = integer(level, 20, 100)
+            if value % 2:
+                raise ValueError('风扇输出步长为 2%')
+            return ['fan-control', json.dumps({'mode':'manual','percent':value})]
+        case ['fan-response', seconds]:
+            return ['fan-control', json.dumps({'mode':'custom','response':integer(seconds,1,20)})]
+        case ['configure', sensitivity, natural]:
+            return ['configure', str(integer(sensitivity,-2,2)), str(integer(natural,0,1))]
+        case _:
+            raise ValueError('不支持的设置')
+
+
+if __name__ == '__main__':
+    try:
+        program = '/usr/libexec/pou-control'
+        os.execv(program, [program, *arguments(sys.argv[1:])])
+    except (OSError, ValueError) as exc:
+        sys.exit(str(exc))

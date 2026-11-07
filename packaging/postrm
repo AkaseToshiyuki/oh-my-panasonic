@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+systemctl daemon-reload || true
+udevadm control --reload-rules || true
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+    udevadm trigger --subsystem-match=input || true
+    udevadm trigger --subsystem-match=misc --sysname-match=uinput || true
+fi
+if [ "$1" = purge ]; then
+    rm -f /etc/panasonic-on-ubuntu/enabled /etc/panasonic-on-ubuntu/wheelpad.toml /etc/panasonic-on-ubuntu/wheelpad.json
+    rm -f /etc/panasonic-on-ubuntu/power.json /etc/panasonic-on-ubuntu/optical.json /etc/panasonic-on-ubuntu/peripherals.json
+    rm -f /etc/panasonic-on-ubuntu/battery-care.json
+    rm -f /var/lib/panasonic-on-ubuntu/battery-care.json
+    rm -f /var/lib/panasonic-on-ubuntu/charging-habits.json
+    rm -f /etc/panasonic-on-ubuntu/fan-control.json
+    rm -f /etc/panasonic-on-ubuntu/io-limit.json
+    rm -f /etc/panasonic-on-ubuntu/ssd-power.json
+    rm -rf -- /var/lib/panasonic-on-ubuntu/face-unlock /var/lib/panasonic-on-ubuntu/face-authorize /var/lib/panasonic-on-ubuntu/supplemented
+    rm -f -- /var/lib/panasonic-on-ubuntu/pam-vendor-sudo /var/lib/panasonic-on-ubuntu/pam-vendor-polkit-1
+    rmdir /var/lib/panasonic-on-ubuntu 2>/dev/null || true
+    rmdir /etc/panasonic-on-ubuntu 2>/dev/null || true
+fi

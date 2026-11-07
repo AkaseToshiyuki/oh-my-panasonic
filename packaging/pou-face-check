@@ -1,0 +1,7 @@
+#!/usr/bin/python3 -I
+from panasonic_on_ubuntu.face import check_locked
+try:
+    ok = check_locked()
+except Exception:
+    ok = False
+raise SystemExit(0 if ok else 1)

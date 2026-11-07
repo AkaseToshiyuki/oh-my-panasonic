@@ -1,0 +1,15 @@
+#!/usr/bin/python3 -I
+from pathlib import Path
+import sys
+from evdev import InputDevice
+try:
+    assert Path('/sys/class/dmi/id/product_name').read_text().strip() == 'CFSV7-3L'
+    d = InputDevice('/dev/input/pou-touchpad')
+    try:
+        assert d.name == 'SynPS/2 Synaptics TouchPad'
+        assert (d.info.bustype, d.info.vendor, d.info.product) == (0x11, 2, 7)
+    finally:
+        d.close()
+except Exception as exc:
+    print(f'POU device check failed: {exc}', file=sys.stderr)
+    sys.exit(1)

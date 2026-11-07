@@ -1,0 +1,2 @@
+ACTION=="add|change", SUBSYSTEM=="misc", KERNEL=="uinput", GROUP="pou-input", MODE="0660", OPTIONS+="static_node=uinput"
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*", ATTR{[dmi/id]product_name}=="CFSV7-3L", ENV{ID_INPUT_TOUCHPAD}=="1", ATTRS{name}=="SynPS/2 Synaptics TouchPad", ATTRS{id/bustype}=="0011", ATTRS{id/vendor}=="0002", ATTRS{id/product}=="0007", GROUP="pou-input", MODE="0660", SYMLINK+="input/pou-touchpad", TAG+="systemd", ENV{SYSTEMD_WANTS}+="pou-wheelpad.service"

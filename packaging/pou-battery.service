@@ -1,0 +1,26 @@
+[Unit]
+Description=Oh My Panasonic battery care with expiring firmware lease
+After=systemd-modules-load.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/python3 -I -m panasonic_on_ubuntu.care
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStopPost=/usr/bin/python3 -I -m panasonic_on_ubuntu.care service-stop
+Restart=on-failure
+RestartSec=5
+WatchdogSec=20
+TimeoutStopSec=12
+KillMode=control-group
+Nice=10
+CPUQuota=10%
+MemoryMax=128M
+TasksMax=16
+UMask=0022
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Confirm one local face authorization
+
+[Service]
+ExecStart=/usr/bin/python3 -I -m panasonic_on_ubuntu.face_privilege
+StandardInput=socket
+StandardOutput=journal
+UMask=0077
+RuntimeMaxSec=40
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+InaccessiblePaths=-/home -/root
+RestrictAddressFamilies=AF_UNIX AF_NETLINK

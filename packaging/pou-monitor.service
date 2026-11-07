@@ -1,0 +1,7 @@
+[Unit]
+Description=Oh My Panasonic local battery history
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pou monitor-once
+NoNewPrivileges=yes
+UMask=0077

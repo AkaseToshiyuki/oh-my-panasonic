@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Oh My Panasonic Status Panel
+Name[zh_CN]=Oh My Panasonic 状态栏
+Comment=Show or reopen the Oh My Panasonic status indicator
+Comment[zh_CN]=显示或重新打开 Oh My Panasonic 常驻状态面板
+Exec=pou tray
+NoDisplay=true
+Icon=pou-symbolic
+Terminal=false
+Categories=Settings;HardwareSettings;

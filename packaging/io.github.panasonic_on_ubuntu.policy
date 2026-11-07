@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <action id="io.github.panasonic_on_ubuntu.control">
+    <description>Configure Oh My Panasonic touchpad and power profiles</description>
+    <message>Authentication is required to change Oh My Panasonic touchpad or power settings</message>
+    <defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pou-control</annotate>
+  </action>
+  <action id="io.github.panasonic_on_ubuntu.adjust">
+    <description>Adjust Oh My Panasonic battery, fan or touchpad preferences</description>
+    <message>Authentication is required to adjust hardware preferences</message>
+    <defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pou-adjust</annotate>
+  </action>
+</policyconfig>
