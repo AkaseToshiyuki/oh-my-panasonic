@@ -13,6 +13,18 @@ STATUS = '0x000000000000000033029ca7402b5b26'
 
 
 class PDFallbackTests(unittest.TestCase):
+    def test_power_service_does_not_issue_raw_pd_queries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)/'pd.json'
+            cache.write_text(json.dumps({'rdo':0x33029ca7,'timestamp':time.time()}))
+            with patch.object(pd,'CACHE',cache), patch.object(pd,'sample') as probe, \
+                    patch.object(pd,'query') as query:
+                self.assertIsNone(pd.start(lambda *args: self.fail('unexpected cache update')))
+                self.assertIsNone(pd.start(lambda *args: self.fail('unexpected cache update')))
+                probe.assert_not_called()
+                query.assert_not_called()
+            self.assertFalse(cache.exists())
+
     def test_verified_fixed_pdos_and_rdo_decode_to_current_contract(self):
         words = pd.decode_pdos(RAW)
         self.assertEqual(pd.cached_profiles({'pdos': words}), [

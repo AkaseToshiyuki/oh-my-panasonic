@@ -2,7 +2,6 @@
 import json
 from pathlib import Path
 import re
-import threading
 import time
 
 
@@ -126,22 +125,8 @@ def sample():
 
 
 def start(atomic):
-    from .power_input import read
-    if read(Path('/sys/class/dmi/id/product_sku')) != 'CF-SV7HD9VS' or not DEBUG.is_dir():
-        return None
-    stop = threading.Event()
-
-    def run():
-        while not stop.is_set():
-            try:
-                record = sample()
-                if record:
-                    atomic(CACHE, record)
-                else:
-                    CACHE.unlink(missing_ok=True)
-            except (OSError, ValueError):
-                CACHE.unlink(missing_ok=True)
-            stop.wait(10)
-
-    threading.Thread(target=run, name='sv7-pd-status', daemon=True).start()
-    return stop
+    """Retire automatic debugfs probes; normal telemetry uses power_supply."""
+    # Repeated GET_PDOS causes UCSI errors and adapter notifications on SV7.
+    # Keep raw queries explicit, outside the recurring power service.
+    CACHE.unlink(missing_ok=True)
+    return None
