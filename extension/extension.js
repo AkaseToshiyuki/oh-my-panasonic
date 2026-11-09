@@ -1,6 +1,7 @@
 import St from 'gi://St';
 import {fmt} from './readings.js';
 import {FaceConsent} from './face.js';
+import {CompactStatus} from './statusbar.js';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -102,6 +103,7 @@ export default class Panasonic extends Extension {
         const top = box(false, 'pou-panel-box');
         top.add_child(new St.Icon({gicon: Gio.icon_new_for_string(`${this.path}/pou-symbolic.svg`), style_class: 'system-status-icon'}));
         this.percent = label(''); top.add_child(this.percent); this.button.add_child(top);
+        this.compact = new CompactStatus(this.percent);
         Main.panel.addToStatusArea(this.uuid, this.button);
         if (GLib.file_test(GLib.build_filenamev([GLib.get_user_config_dir(),'panasonic-on-ubuntu','indicator-hidden']),GLib.FileTest.EXISTS))
             this.hide();
@@ -133,10 +135,7 @@ export default class Panasonic extends Extension {
                 try {
                     this.batteryProxy = Gio.DBusProxy.new_for_bus_finish(result);
                     const update = () => {
-                        const present = this.batteryProxy.get_cached_property('IsPresent')?.unpack();
-                        const value = this.batteryProxy.get_cached_property('Percentage')?.unpack();
-                        this.percent.text = this.batteryProxy.g_name_owner && present && Number.isFinite(value)
-                            ? `${Math.round(value)}%` : '';
+                        this.compact.updateBattery(this.batteryProxy);
                     };
                     this.batteryChanged = this.batteryProxy.connect('g-properties-changed', update);
                     this.batteryOwner = this.batteryProxy.connect('notify::g-name-owner', update);
@@ -144,8 +143,8 @@ export default class Panasonic extends Extension {
                 } catch (e) { if (!cancelled.is_cancelled()) console.error(e); }
             });
     }
-    show() { this.hidden = false; this.button.show(); }
-    hide() { this.hidden = true; this.button.menu.close(); this.button.hide(); }
+    show() { this.hidden = false; this.button.show(); this.compact?.setVisible(true); }
+    hide() { this.hidden = true; this.button.menu.close(); this.button.hide(); this.compact?.setVisible(false); }
     stopTelemetry() {
         const worker = this.telemetryWorker;
         this.telemetryWorker = null;
@@ -235,7 +234,6 @@ export default class Panasonic extends Extension {
             if (data.power?.timestamp != null && data.power.timestamp < this.data.power?.timestamp)
                 data.power = this.data.power;
             this.previous = data; this.data = data;
-            if (data.battery) this.percent.text = fmt(this.value('capacity'),'%');
             this.update();
         } catch(e) { if (this.alive && this.button.menu.isOpen) this.message(`状态刷新失败：${e.message}`); }
         finally {
@@ -263,7 +261,7 @@ export default class Panasonic extends Extension {
         catch(e) { if(this.alive) {this.message(e.message); Main.notifyError('Oh My Panasonic：操作未完成', e.message.slice(0,400));} }
     }
     control(...args) {
-        const helper = args[0] === 'battery' && ['full','system'].includes(args[1]) ? '/usr/libexec/pou-adjust' : '/usr/libexec/pou-control';
+        const helper = args[0] === 'battery' && ['full','system','care'].includes(args[1]) ? '/usr/libexec/pou-adjust' : '/usr/libexec/pou-control';
         this.action(['/usr/bin/pkexec',helper,...args]);
     }
     settings(panel) { this.button.menu.close(); this.launch(['gnome-control-center',panel]); }
@@ -304,7 +302,7 @@ export default class Panasonic extends Extension {
         });
     }
     meter(getter, parent=this.body) { const area=createPlot(100,true); parent.add_child(area); this.updaters.push(()=>{const value=getter();area.visible=Number.isFinite(value);area.points=area.visible?[[0,value]]:[];area.queue_repaint();}); }
-    buttons(items) { const row=box(false,'pou-actions'); this.body.add_child(row); for(const [title,callback] of items)this.actionButton(title,callback,row); }
+    buttons(items) { const row=box(false,'pou-actions'); this.body.add_child(row); for(const [title,callback,dynamic] of items)this.actionButton(title,callback,row,dynamic); }
     list(getter, render) { const target=box();this.body.add_child(target);let previous='';this.updaters.push(()=>{const items=getter();const signature=JSON.stringify(items);if(signature===previous)return;previous=signature;target.destroy_all_children();if(!items.length)target.add_child(label('暂无设备或记录','pou-subtitle'));for(const item of items)render(item,target);}); }
     slider(title, getter, argv, minimum=0, maximum=100, suffix='') {
         const row = box(false, 'pou-row');
@@ -458,7 +456,9 @@ export default class Panasonic extends Extension {
             this.stat('电池保养',()=>this.data.care?.label??'等待服务');
             this.stat('预计拔电',()=>this.data.care?.departure_prediction?.label??'');
             this.stat('充电上限',()=>this.data.care?.config?.limit == null ? '' : fmt(this.data.care.config.limit,'%'));
-            this.buttons([['立刻充满',()=>this.control('battery','full')],['恢复系统电池管理',()=>this.control('battery','system')]]);
+            this.buttons([['立刻充满',()=>this.control('battery','full')],
+                ['',()=>this.control('battery',this.data.care?.config?.mode==='system'?'care':'system'),
+                    ()=>this.data.care?.config?.mode==='system'?'使用软件电源管理':'恢复系统电池管理']]);
             this.text(()=>this.data.care?.error||'');
             this.chart('电量趋势 · 最近 24 小时 · 纵轴 0–100%',()=>this.data.battery_history??[],'%',100);
             this.text(()=>{const points=this.data.battery_history??[];return points.length>1?`${new Date(points[0][0]*1000).toLocaleTimeString()} → ${new Date(points.at(-1)[0]*1000).toLocaleTimeString()}`:'';});
@@ -602,6 +602,7 @@ export default class Panasonic extends Extension {
         this.transitionCheck=0;
         this.alive=false;if(this.timer)GLib.Source.remove(this.timer);this.timer=0;
         this.stopTelemetry();
+        this.compact?.destroy();this.compact=null;
         this.batteryCancel?.cancel();this.batteryCancel=null;
         if(this.batteryChanged)this.batteryProxy?.disconnect(this.batteryChanged);
         if(this.batteryOwner)this.batteryProxy?.disconnect(this.batteryOwner);

@@ -119,6 +119,7 @@ class App(Adw.Application):
         self.message.set_margin_start(24);self.message.set_margin_end(24);self.message.set_margin_top(10);self.message.set_margin_bottom(10)
         outer.append(self.message)
         pages=[('overview','总览','view-grid-symbolic'),('battery','电源与电池','battery-good-symbolic'),('cpu','电源策略','speedometer-symbolic'),('fan','风扇与散热','weather-windy-symbolic'),('network','网络与 Wi-Fi','network-wireless-symbolic'),('bluetooth','蓝牙设备','bluetooth-active-symbolic'),('audio','声音与设备','audio-volume-high-symbolic'),('display','显示与亮度','display-brightness-symbolic'),('touchpad','圆形触控板','input-touchpad-symbolic'),('storage','存储与节能','drive-harddisk-symbolic'),('face','人脸解锁','face-smile-symbolic')]
+        pages.insert(-1,('indicator','状态栏','view-more-symbolic'))
         self.page_ids=[]
         for key,title,icon in pages:
             row=Gtk.ListBoxRow();line=box(False,10);line.append(Gtk.Image(icon_name=icon));line.append(label(title));row.set_child(line);self.nav.append(row);self.page_ids.append(key)
@@ -217,7 +218,9 @@ class App(Adw.Application):
         parent.append(flow)
         sizes=Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         for title,callback in items:
-            button=Gtk.Button(label=title,hexpand=True,css_classes=['pou-action'])
+            button=Gtk.Button(label=title() if callable(title) else title,hexpand=True,css_classes=['pou-action'])
+            if callable(title):
+                self.updaters.append(lambda b=button,getter=title:b.set_label(getter()))
             button.connect('clicked',lambda _,cb=callback:cb())
             sizes.add_widget(button)
             flow.append(button)
@@ -408,6 +411,35 @@ class App(Adw.Application):
 
     def output(self,kind):return next((d for d in self.get('audio',kind) or [] if d.get('default')),{})
 
+    def statusbar_controls(self,page):
+        from . import statusbar
+        card=self.card(page,'图标')
+        self.actions(card,[('显示图标',lambda:self.execute(['/usr/bin/pou','tray'])),
+                           ('隐藏图标',lambda:self.execute(['/usr/bin/pou','hide-tray']))])
+        card=self.card(page,'常驻信息')
+        count=label('', 'pou-note');card.append(count)
+        grid=Gtk.FlowBox(hexpand=True,homogeneous=True,selection_mode=Gtk.SelectionMode.NONE,
+                         max_children_per_line=2,min_children_per_line=1,column_spacing=18,row_spacing=12)
+        card.append(grid)
+        selected=statusbar.load();buttons={};changing=False
+        def update_choices():
+            count.set_label(f'已选 {len(selected)} / {statusbar.MAX_ITEMS}')
+            for key,button in buttons.items():
+                button.set_sensitive(key in selected or len(selected)<statusbar.MAX_ITEMS)
+        def changed(button,key):
+            nonlocal selected,changing
+            if changing:return
+            proposed=[k for k,_ in statusbar.OPTIONS if (button.get_active() if k==key else k in selected)]
+            try:statusbar.save(proposed)
+            except (OSError,ValueError) as exc:
+                changing=True;button.set_active(key in selected);changing=False
+                self.message.set_label(str(exc));return
+            selected=proposed;update_choices()
+        for key,title in statusbar.OPTIONS:
+            button=Gtk.CheckButton(label=title,active=key in selected,hexpand=True)
+            button.connect('toggled',changed,key);buttons[key]=button;grid.append(button)
+        update_choices()
+
     def build_page(self,key,page):
         if key=='overview':
             self.metrics(page,[('电池',lambda:fmt(self.battery('fields','capacity'),'%')),('CPU 功率',lambda:fmt(self.live('watts'),' W')),('CPU 温度',lambda:fmt(self.live('temperature'),' °C'))])
@@ -419,7 +451,10 @@ class App(Adw.Application):
             self.stat(card,'内核',lambda:self.get('hardware','kernel') or '读取中')
             card=self.card(page,'状态栏')
             self.actions(card,[('显示图标',lambda:self.execute(['/usr/bin/pou','tray'])),('隐藏图标',lambda:self.execute(['/usr/bin/pou','hide-tray']))])
+            self.actions(card,[('自定义显示内容',lambda:self.nav.select_row(self.nav.get_row_at_index(self.page_ids.index('indicator'))))])
             self.chart(page,'CPU 功率 · 最近 5 分钟 / W',lambda:[[p[0],p[1]] for p in self.get('power','history') or []],None,'W')
+        elif key=='indicator':
+            self.statusbar_controls(page)
         elif key=='battery':
             self.metrics(page,[('当前电量',lambda:fmt(self.battery('fields','capacity'),'%')),('供电来源',lambda:self.get('power_summary','source') or '读取中')])
             card=self.card(page,'供电接口与充电')
@@ -435,7 +470,8 @@ class App(Adw.Application):
             self.stat(card,'服务状态',lambda:self.get('care','label') or '等待服务')
             self.slider(card,'充电上限',lambda:self.get('care','config','limit') if self.get('care','supported') else None,['/usr/bin/pkexec','/usr/libexec/pou-adjust','battery-limit'],50,100)
             self.actions(card,[('立刻充满',lambda:self.control('battery','full')),
-                               ('恢复系统电池管理',lambda:self.control('battery','system'))])
+                               (lambda:'使用软件电源管理' if self.get('care','config','mode')=='system' else '恢复系统电池管理',
+                                lambda:self.control('battery','care' if self.get('care','config','mode')=='system' else 'system'))])
             self.text(card,lambda:self.get('care','error') or '')
             self.chart(page,'电量历史 · 最近 24 小时 / %',lambda:self.get('battery_history') or [],100,'%')
             self.chart(page,'电池充电功率 · 最近 1 小时 / W',lambda:self.get('charge_power_history') or [],None,'W')
@@ -591,7 +627,7 @@ class App(Adw.Application):
         except OSError as exc:self.message.set_label(str(exc))
     def settings(self,page):self.launch(['gnome-control-center',page])
     def control(self,*args):
-        helper = '/usr/libexec/pou-adjust' if args[:1] == ('battery',) and args[1:] in [('full',),('system',)] else '/usr/libexec/pou-control'
+        helper = '/usr/libexec/pou-adjust' if args[:1] == ('battery',) and args[1:] in [('full',),('system',),('care',)] else '/usr/libexec/pou-control'
         self.execute(['pkexec',helper,*args])
     def execute(self,argv,on_done=None):
         self.message.set_label('正在应用设置…')
@@ -620,8 +656,11 @@ class App(Adw.Application):
         if self.loading:
             if force:self.refresh_pending=True
             return True
-        self.loading=True
         scope = self.stack.get_visible_child_name()
+        if scope=='indicator':
+            if self.message.get_label()=='正在连接系统服务…':self.message.set_label('')
+            return True
+        self.loading=True
         def work():
             try:
                 from .telemetry import collect

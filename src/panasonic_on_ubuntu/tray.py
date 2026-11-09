@@ -48,8 +48,12 @@ class Tray:
         self.pdo_choices = self.item(battery, '适配器固定档位', sensitive=False)
         self.input_power = self.item(battery, '接口实测输入功率', sensitive=False)
         self.care = self.item(battery, '电池保养状态', sensitive=False)
-        for title,action in [('立刻充满','full'),('恢复系统电池管理','system')]:
-            self.item(battery,title,lambda a=action:self.control('battery',a))
+        self.item(battery,'立刻充满',lambda:self.control('battery','full'))
+        self.battery_mode = None
+        from .statusbar import FallbackReadout
+        self.compact = FallbackReadout()
+        self.battery_management = self.item(battery,'恢复系统电池管理',
+            lambda:self.control('battery','care' if self.battery_mode=='system' else 'system'))
         self.item(battery, '电量历史与详情', lambda: self.open_app(['/usr/bin/pou', 'gui']))
         power = self.submenu('电源策略')
         self.profile = self.item(power, '电源模式', sensitive=False)
@@ -182,6 +186,7 @@ class Tray:
                     'bluetooth': ['bluetoothctl', 'show'],
                 }.items()}
                 values['battery_samples'] = samples
+                values['compact'] = self.compact.collect(data)
                 from . import power_profiles
                 try:
                     values['profile'] = power_profiles.get_active()
@@ -208,6 +213,8 @@ class Tray:
         self.busy = False
         from .care import status as care_status
         care=care_status()
+        self.battery_mode=care.get('config',{}).get('mode')
+        self.battery_management.set_label('使用软件电源管理' if self.battery_mode=='system' else '恢复系统电池管理')
         source=data.get('power_input',{})
         from .power_summary import describe
         display = describe(data,care,values.get('battery_samples', []))
@@ -231,11 +238,10 @@ class Tray:
             state = {'Charging': '充电中', 'Discharging': '放电中', 'Full': '已充满', 'Not charging': '未充电'}.get(status, status or '未知')
             text = ' · '.join(filter(None,(percent,display['summary'])))
             self.indicator.set_icon_full('pou-symbolic', text)
-            self.indicator.set_label(percent, '100%')
             self.summary.set_label(text)
         else:
-            self.indicator.set_label('', '100%')
             self.summary.set_label('未检测到电池')
+        self.indicator.set_label(values.get('compact',''), '')
         current = values['profile']
         self.readout(self.profile, '系统电源', {'balanced': '均衡', 'performance': '性能', 'power-saver': '省电'}.get(current))
         for value, (item, label) in self.profiles.items():

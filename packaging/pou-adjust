@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Narrow entry point for the interactive sliders and two battery actions."""
+"""Narrow entry point for interactive sliders and battery management."""
 import json
 import os
 import sys
@@ -16,7 +16,7 @@ def arguments(args):
     match args:
         case ['battery-limit', level]:
             return ['battery-limit', str(integer(level, 50, 100))]
-        case ['battery', ('full' | 'system') as mode]:
+        case ['battery', ('full' | 'system' | 'care') as mode]:
             return ['battery', mode]
         case ['fan-percent', level]:
             value = integer(level, 20, 100)
