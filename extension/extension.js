@@ -361,7 +361,7 @@ export default class Panasonic extends Extension {
             this.stat('PD 合约',()=>this.data.battery?.power_input?.contract_details??'');
             this.stat('电池保养',()=>this.data.care?.label??'等待服务');
             this.stat('预计拔电',()=>this.data.care?.departure_prediction?.label??'');
-            this.slider('充电上限',()=>this.data.care?.supported?this.data.care?.config?.limit:null,['/usr/bin/pkexec','/usr/libexec/pou-adjust','battery-limit'],50,100);
+            this.stat('充电上限',()=>this.data.care?.config?.limit == null ? '' : fmt(this.data.care.config.limit,'%'));
             this.buttons([['立刻充满',()=>this.control('battery','full')],['恢复系统电池管理',()=>this.control('battery','system')]]);
             this.text(()=>this.data.care?.error||'');
             this.chart('电量趋势 · 最近 24 小时 · 纵轴 0–100%',()=>this.data.battery_history??[],'%',100);
