@@ -116,7 +116,7 @@ def detect(root=Path('/sys/class/power_supply'), typec=Path('/sys/class/typec'),
         if port['protocol'] in ('PD','PD_PPS'):
             volts = port['volts']
             pos = port['pdo_position']
-            result['voltage_label'] = f'{volts:g} V' if volts else (f'未上报（PDO {pos}）' if pos else '未上报')
+            result['voltage_label'] = f'{volts:g} V' if volts else ''
         if port['contract_w'] is not None:
             prefix = f"固定档 {port['fixed_pdo']} · " if port['fixed_pdo'] else ''
             result['contract_label'] = f"{prefix}{port['volts']:g} V × {port['amps']:g} A · {port['contract_w']:g} W"

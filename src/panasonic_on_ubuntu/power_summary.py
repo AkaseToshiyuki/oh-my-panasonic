@@ -1,5 +1,6 @@
 """Presentation shared by the panel and both tray implementations."""
 import math
+from .readings import text as reading_text
 
 
 def duration(seconds):
@@ -98,4 +99,4 @@ def describe(snapshot, care, samples=()):
     return {'source':name, 'status':state, 'power':power,
             'charge_power':battery_power if status == 'Charging' else '',
             'discharge_power':battery_power if status == 'Discharging' else '',
-            'summary':' · '.join(filter(None,(name,power,state)))}
+            'summary':' · '.join(filter(None,map(reading_text,(name,power,state))))}

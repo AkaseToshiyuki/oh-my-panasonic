@@ -1,4 +1,5 @@
 import St from 'gi://St';
+import {fmt} from './readings.js';
 import {FaceConsent} from './face.js';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -14,7 +15,6 @@ import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 
 const BUS = 'io.github.panasonic_on_ubuntu.Panel';
 const XML = `<node><interface name="${BUS}"><method name="Show"/><method name="Hide"/><method name="Open"><arg name="page" type="s" direction="in"/></method><method name="SetBrightness"><arg name="percent" type="i" direction="in"/></method><method name="GetBrightness"><arg name="percent" type="i" direction="out"/></method><method name="Inspect"><arg name="result" type="s" direction="out"/></method></interface></node>`;
-const fmt = (value, unit = '') => value === null || value === undefined ? '未提供' : `${value}${unit}`;
 const box = (vertical = true, style = '') => new St.BoxLayout({vertical, style_class: style, x_expand: true});
 const label = (text, style = '') => new St.Label({text: String(text), style_class: style, y_align: Clutter.ActorAlign.CENTER});
 const modes = {'balanced': '均衡', 'power-saver': '省电', 'performance': '性能'};
@@ -150,7 +150,7 @@ export default class Panasonic extends Extension {
             if (data.power?.timestamp != null && data.power.timestamp < this.data.power?.timestamp)
                 data.power = this.data.power;
             this.previous = data; this.data = data;
-            const battery = this.battery(); this.percent.text = battery ? `${battery.fields.capacity.value}%` : '—';
+            this.percent.text = fmt(this.value('capacity'),'%');
             this.update();
         } catch(e) { if (this.alive) this.message(`状态刷新失败：${e.message}`); }
         finally { this.loading = false; }
@@ -158,7 +158,7 @@ export default class Panasonic extends Extension {
     battery() { return this.data.battery?.batteries?.[0]; }
     value(key) { return this.battery()?.fields?.[key]?.value; }
     metric(key) { return this.battery()?.metrics?.[key]; }
-    update() { this.updating = true; for (const update of this.updaters) update(); this.updating = false; }
+    update() { this.updating = true; for(const rows of this.groups??[])rows.forEach(r=>r.show()); for (const update of this.updaters) update(); this.updating = false; }
     message(text) { if(this.errorLabel) { this.errorLabel.text = text.slice(0,250); this.errorLabel.visible = !!text; } }
     async action(argv) {
         this.message('正在应用…');
@@ -179,13 +179,13 @@ export default class Panasonic extends Extension {
         this.action(['/usr/bin/pkexec',helper,...args]);
     }
     settings(panel) { this.button.menu.close(); this.launch(['gnome-control-center',panel]); }
-    bind(widget, getter) { this.updaters.push(() => { widget.text = String(getter()); widget.visible = !!widget.text; }); return widget; }
+    bind(widget, getter) { this.updaters.push(() => { widget.text = String(getter() ?? ''); widget.visible = !!widget.text; }); return widget; }
     text(getter, style = 'pou-subtitle', parent = this.body) { const item = this.bind(label('',style),getter); item.clutter_text.line_wrap=true;item.clutter_text.ellipsize=Pango.EllipsizeMode.NONE;parent.add_child(item); return item; }
-    stat(title, getter, parent = this.body) { const row=box(false,'pou-row'); const name=label(title,'pou-key'); name.x_expand=true; row.add_child(name); const value=this.bind(label('','pou-value'),getter); row.add_child(value); parent.add_child(row); this.updaters.push(()=>{row.visible=!!value.text;}); }
+    stat(title, getter, parent = this.body) { const row=box(false,'pou-row'); const name=label(title,'pou-key'); name.x_expand=true; row.add_child(name); const value=this.bind(label('','pou-value'),()=>fmt(getter())); row.add_child(value); parent.add_child(row); this.updaters.push(()=>{row.visible=!!value.text;}); }
     actionButton(title, action, parent=this.body, dynamic=null) { const btn=new St.Button({label:title,style_class:'pou-button',can_focus:true,x_expand:true}); btn.connect('clicked',action); parent.add_child(btn); if(dynamic) this.updaters.push(()=>{btn.label=dynamic();}); return btn; }
-    nav(title, icon, detail, page) { const btn=new St.Button({style_class:'pou-row',can_focus:true,x_expand:true}); const row=box(false); row.add_child(new St.Icon({icon_name:icon,icon_size:20})); const texts=box(); texts.add_child(label(title,'pou-value')); texts.add_child(this.bind(label('','pou-subtitle'),detail)); row.add_child(texts); row.add_child(new St.Icon({icon_name:'go-next-symbolic',icon_size:16})); btn.set_child(row); btn.connect('clicked',()=>this.page(page)); this.body.add_child(btn); }
+    nav(title, icon, detail, page) { const btn=new St.Button({style_class:'pou-row',can_focus:true,x_expand:true}); const row=box(false); row.add_child(new St.Icon({icon_name:icon,icon_size:20})); const texts=box(); texts.add_child(label(title,'pou-value')); texts.add_child(this.bind(label('','pou-subtitle'),()=>fmt(detail()))); row.add_child(texts); row.add_child(new St.Icon({icon_name:'go-next-symbolic',icon_size:16})); btn.set_child(row); btn.connect('clicked',()=>this.page(page)); this.body.add_child(btn); }
     chart(title, getter, unit, max=null, second=null) {
-        this.text(()=>title);
+        const heading=this.text(()=>title);
         const latest = label('', 'pou-value');
         this.body.add_child(latest);
         const row = box(false);
@@ -202,15 +202,18 @@ export default class Panasonic extends Extension {
             const valid = p => Array.isArray(p) && p.length >= 2 && p.every(Number.isFinite);
             area.points = getter().filter(valid);
             area.second = second ? second().filter(valid) : [];
+            const hasData=area.points.length>0 || area.second.length>0;
+            heading.visible=hasData;latest.visible=hasData;
+            row.visible=area.points.length>1 || area.second.length>1;
             area.maximum = axisMax([...area.points,...area.second], max);
             ticks.forEach((tick,i) => {tick.text = formatTick(area.maximum*(1-i/2));});
             const reading = series => series.length ? formatTick(series.at(-1)[1]) + ' ' + unit : '—';
-            latest.text = second ? '下载 ' + reading(area.points) + '　上传 ' + reading(area.second)
-                                 : area.points.length ? '最近 ' + reading(area.points) : unit;
+            latest.text = second ? [area.points.length?'下载 '+reading(area.points):'',area.second.length?'上传 '+reading(area.second):''].filter(Boolean).join('　')
+                                 : area.points.length ? '最近 ' + reading(area.points) : '';
             area.queue_repaint();
         });
     }
-    meter(getter, parent=this.body) { const area=createPlot(100,true); parent.add_child(area); this.updaters.push(()=>{area.points=[[0,getter()??0]];area.queue_repaint();}); }
+    meter(getter, parent=this.body) { const area=createPlot(100,true); parent.add_child(area); this.updaters.push(()=>{const value=getter();area.visible=Number.isFinite(value);area.points=area.visible?[[0,value]]:[];area.queue_repaint();}); }
     buttons(items) { const row=box(false,'pou-actions'); this.body.add_child(row); for(const [title,callback] of items)this.actionButton(title,callback,row); }
     list(getter, render) { const target=box();this.body.add_child(target);let previous='';this.updaters.push(()=>{const items=getter();const signature=JSON.stringify(items);if(signature===previous)return;previous=signature;target.destroy_all_children();if(!items.length)target.add_child(label('暂无设备或记录','pou-subtitle'));for(const item of items)render(item,target);}); }
     slider(title, getter, argv, minimum=0, maximum=100, suffix='') {
@@ -252,6 +255,7 @@ export default class Panasonic extends Extension {
             if (sending || dragging || (this.data.timestamp ?? 0) < lastWrite) return;
             const value = getter();
             syncing = true;
+            row.visible=slider.visible=!!fmt(value);
             slider.reactive = value != null;
             slider.value = ((value ?? minimum) - minimum) / (maximum - minimum);
             reading.text = fmt(value, '%');
@@ -311,7 +315,8 @@ export default class Panasonic extends Extension {
             syncing = true;
             slider.reactive = percent !== null;
             if (!dragging) slider.value = (percent ?? 0) / 100;
-            reading.text = percent === null ? '亮度不可用' : `内置屏幕亮度　${percent}%`;
+            reading.text = percent === null ? '' : `内置屏幕亮度　${percent}%`;
+            reading.visible=slider.visible=percent !== null;
             syncing = false;
         };
         slider.connect('drag-begin', () => { dragging = true; });
@@ -338,16 +343,17 @@ export default class Panasonic extends Extension {
     page(route) {
         if (route === 'optical') route = 'power';
         this.route = ['home','battery','network','bluetooth','audio','power','touchpad','display'].includes(route)?route:'home';
-        this.body.destroy_all_children();this.updaters=[];
+        this.body.destroy_all_children();this.updaters=[];this.groups=[];
         const titles={home:'Oh My Panasonic',battery:'电源与电池',network:'Wi-Fi 与网络',bluetooth:'蓝牙设备',audio:'声音与设备',power:'电源策略',touchpad:'触控板',display:'显示与亮度'};
         const header=box(false,'pou-header'); if(this.route!=='home'){const back=this.actionButton('‹',()=>this.page('home'),header);back.x_expand=false;back.width=36;}header.add_child(label(titles[this.route],'pou-title'));this.body.add_child(header);
         if(this.route==='home') {
-            const card=box(true,'pou-card');this.body.add_child(card);this.text(()=>fmt(this.value('capacity'),'%'),'pou-hero',card);this.text(()=>this.data.power_summary?.status??'正在读取电池','pou-subtitle',card);this.meter(()=>Number(this.value('capacity')),card);
+            const card=box(true,'pou-card');this.body.add_child(card);this.text(()=>fmt(this.value('capacity'),'%'),'pou-hero',card);this.text(()=>fmt(this.data.power_summary?.status),'pou-subtitle',card);this.meter(()=>this.value('capacity')==null?null:Number(this.value('capacity')),card);
+            this.updaters.push(()=>{card.visible=card.get_children().some(c=>c.visible);});
             this.nav('电源与电池','battery-good-symbolic',()=>this.data.power_summary?.summary??'读取中','battery');
             this.nav('Wi-Fi','network-wireless-symbolic',()=>this.data.network?.connected?`${this.data.network.ssid}  ${signal(this.data.network.signal)} ${this.data.network.signal}%`:this.data.network?.enabled?'未连接':'已关闭','network');
             this.nav('蓝牙','bluetooth-active-symbolic',()=>this.data.bluetooth?.enabled?`已开启 · ${(this.data.bluetooth.devices??[]).filter(d=>d.connected).length} 台已连接`:'已关闭','bluetooth');
             this.nav('声音','audio-volume-high-symbolic',()=>{const d=this.data.audio?.sinks?.find(s=>s.default);return d?`${d.mute?'已静音':`${d.volume}%`} · ${d.name}`:'服务不可用';},'audio');
-            this.nav('电源策略','power-profile-balanced-symbolic',()=>`${modes[this.data.system?.profile]??'读取中'} · ${fanPolicy(this.data)}`,'power');
+            this.nav('电源策略','power-profile-balanced-symbolic',()=>[fmt(modes[this.data.system?.profile]),fmt(fanPolicy(this.data))].filter(Boolean).join(' · '),'power');
             this.nav('触控板','input-touchpad-symbolic',()=>this.data.system?.pad_active?'圆形滚动已开启':'圆形滚动未开启','touchpad');
             this.nav('显示与亮度','display-brightness-symbolic',()=>fmt(this.screenPercent(),'%'),'display');
         } else if(this.route==='battery') {
@@ -365,9 +371,10 @@ export default class Panasonic extends Extension {
             this.buttons([['立刻充满',()=>this.control('battery','full')],['恢复系统电池管理',()=>this.control('battery','system')]]);
             this.text(()=>this.data.care?.error||'');
             this.chart('电量趋势 · 最近 24 小时 · 纵轴 0–100%',()=>this.data.battery_history??[],'%',100);
-            this.text(()=>{const points=this.data.battery_history??[];return points.length>1?`${new Date(points[0][0]*1000).toLocaleTimeString()} → ${new Date(points.at(-1)[0]*1000).toLocaleTimeString()}`:'记录积累中';});
+            this.text(()=>{const points=this.data.battery_history??[];return points.length>1?`${new Date(points[0][0]*1000).toLocaleTimeString()} → ${new Date(points.at(-1)[0]*1000).toLocaleTimeString()}`:'';});
             this.chart('电池充电功率 W · 最近 1 小时',()=>this.data.charge_power_history??[],'W');
-            this.stat('满充 / 设计容量',()=>`${fmt(this.metric('energy_full_wh'))} / ${fmt(this.metric('energy_full_design_wh'))} Wh`);
+            this.stat('满充容量',()=>fmt(this.metric('energy_full_wh'),' Wh'));
+            this.stat('设计容量',()=>fmt(this.metric('energy_full_design_wh'),' Wh'));
             this.stat('电池电压',()=>fmt(this.metric('voltage_v'),' V'));
             this.stat('累计充电指数',()=>this.metric('cycle_count')==null?(this.metric('charge_index')??''):'');
             this.stat('电池循环次数',()=>this.metric('cycle_count')??'');
@@ -375,10 +382,12 @@ export default class Panasonic extends Extension {
         } else if(this.route==='network') {
             this.text(()=>this.data.network?.ssid??'未连接','pou-title');
             this.actionButton('',()=>this.control('wifi',this.data.network?.enabled?'off':'on'),this.body,()=>this.data.network?.enabled?'关闭 Wi-Fi':'开启 Wi-Fi');
-            this.stat('信号',()=>this.data.network?.connected?`${signal(this.data.network.signal)}  ${this.data.network.signal}%`:'—');
-            this.stat('频率 / 链路速率',()=>`${fmt(this.data.network?.frequency,' MHz')} · ${fmt(this.data.network?.rate_mbps,' Mbps')}`);
+            this.stat('信号',()=>this.data.network?.connected&&Number.isFinite(this.data.network?.signal)?`${signal(this.data.network.signal)}  ${this.data.network.signal}%`:'');
+            this.stat('频率',()=>fmt(this.data.network?.frequency,' MHz'));
+            this.stat('链路速率',()=>fmt(this.data.network?.rate_mbps,' Mbps'));
             this.stat('IPv4',()=>this.data.network?.addresses?.join(', ')||'—');this.stat('网关',()=>this.data.network?.gateway??'—');
-            this.stat('当前流量',()=>`↓ ${fmt(Math.round(this.rxPoints.at(-1)?.[1]??0),' KB/s')}  ↑ ${fmt(Math.round(this.txPoints.at(-1)?.[1]??0),' KB/s')}`);
+            this.stat('下载速率',()=>this.rxPoints.length?fmt(Math.round(this.rxPoints.at(-1)[1]),' KB/s'):'');
+            this.stat('上传速率',()=>this.txPoints.length?fmt(Math.round(this.txPoints.at(-1)[1]),' KB/s'):'');
             this.stat('无线省电',()=>this.data.peripherals?.devices?.filter(d=>d.kind==='wifi').map(d=>d.value==='on'?'已开启':'低延迟').join('、')||'未提供');
             this.chart('最近 5 分钟流量 · 绿色下载 / 蓝色上传',()=>this.rxPoints,'KiB/s',null,()=>this.txPoints);
             this.text(()=> '附近网络 · 最近扫描结果');
@@ -402,9 +411,13 @@ export default class Panasonic extends Extension {
             const cards=box(false,'pou-actions');this.body.add_child(cards);
             for(const [name,getter] of [['平台功耗',()=>fmt(sample()?.platform_w,' W')],['CPU 封装',()=>fmt(sample()?.watts,' W')],['CPU 温度',()=>fmt(sample()?.temperature,' °C')]]) {
                 const card=box(true,'pou-card');cards.add_child(card);this.text(()=>name,'pou-subtitle',card);this.text(getter,'pou-reading',card);
+                this.updaters.push(()=>{card.visible=!!fmt(getter());});
             }
-            this.stat('忙碌频率 / 含空闲平均',()=>`${fmt(sample()?.busy_mhz)} / ${fmt(sample()?.average_mhz)} MHz`);
-            this.stat('CPU 活跃 / 内存占用',()=>`${fmt(sample()?.busy_percent,'%')} / ${fmt(this.data.system?.memory_percent,'%')}`);
+            this.updaters.push(()=>{cards.visible=cards.get_children().some(c=>c.visible);});
+            this.stat('忙碌频率',()=>fmt(sample()?.busy_mhz,' MHz'));
+            this.stat('含空闲平均频率',()=>fmt(sample()?.average_mhz,' MHz'));
+            this.stat('CPU 活跃',()=>fmt(sample()?.busy_percent,'%'));
+            this.stat('内存占用',()=>fmt(this.data.system?.memory_percent,'%'));
             this.chart('平台功耗 W · 最近 5 分钟',()=>this.data.power?.history?.filter(p=>Number.isFinite(p[4])).map(p=>[p[0],p[4]])??[],'W');
             this.chart('CPU 功率 W · 最近 5 分钟',()=>this.data.power?.history?.map(p=>[p[0],p[1]])??[],'W');
             this.chart('忙碌频率 MHz · 最近 5 分钟',()=>this.data.power?.history?.map(p=>[p[0],p[2]])??[],'MHz',3400);
@@ -412,10 +425,13 @@ export default class Panasonic extends Extension {
             this.stat('CPU 预设',()=>cpuModes[this.data.power?.mode]??'不可用');
             this.buttons(['eco','balanced','performance'].map(key=>[cpuModes[key],()=>this.control('cpu',key)]));
             this.buttons(['adaptive','boost','system'].map(key=>[cpuModes[key],()=>this.control('cpu',key)]));
-            this.stat('长期 / 短时上限',()=>`${fmt(this.data.power?.pl1_w)} / ${fmt(this.data.power?.pl2_w)} W`);
-            this.stat('EC 增强 / 内核温度保护',()=>`${this.data.power?.ec_lease?'运行中':'未启用'} · ${fmt(this.data.power?.kernel_guard_c,' °C')}`);
+            this.stat('长期功率上限',()=>fmt(this.data.power?.pl1_w,' W'));
+            this.stat('短时功率上限',()=>fmt(this.data.power?.pl2_w,' W'));
+            this.stat('EC 增强',()=>this.data.power?.ec_lease==null?'':this.data.power.ec_lease?'运行中':'未启用');
+            this.stat('内核温度保护',()=>fmt(this.data.power?.kernel_guard_c,' °C'));
             this.text(()=>this.data.power?.error||'','pou-subtitle');
-            this.text(()=>this.data.peripherals?.error||'外设策略：'+({follow:'随 CPU 预设',save:'省电',performance:'低延迟',system:'系统默认'}[this.data.peripherals?.requested]??'等待服务'));
+            this.stat('外设策略',()=>({follow:'随 CPU 预设',save:'省电',performance:'低延迟',system:'系统默认'}[this.data.peripherals?.requested]??''));
+            this.text(()=>this.data.peripherals?.error??'');
             this.buttons([['随预设',()=>this.control('peripherals','follow')],['外设省电',()=>this.control('peripherals','save')],['低延迟',()=>this.control('peripherals','performance')],['恢复系统',()=>this.control('peripherals','system')]]);
             this.stat('系统电源模式',()=>modes[this.data.system?.profile]??'未知');this.buttons(Object.entries(modes).map(([key,value])=>[value,()=>this.control('profile',key)]));
             this.stat('风扇模式',()=>fanPolicy(this.data));this.stat('风扇反馈',()=>this.data.power?.fan?.feedback==null?'—':`${this.data.power.fan.feedback}%`);
@@ -424,14 +440,18 @@ export default class Panasonic extends Extension {
             fanButtons.push(['恢复',()=>this.control('fan','restore')]);this.buttons(fanButtons);
             this.stat('固件动态功率限制',()=>({0:'关闭',1:'开启'}[this.data.firmware?.power_limits_enabled]??'未知'));
             const d=()=>this.data.optical??{};
+            const ssdStart=this.body.get_n_children();
             this.text(()=>'SSD 电源','pou-title');
             const ssd=key=>{const d=this.data.ssd_power??{};return !d.available||d.stale?null:d[key];};
             this.stat('工作功率上限',()=>fmt(ssd('maximum_w'),' W'));
             this.stat('当前状态',()=>({0:'工作 PS0',1:'工作 PS1',2:'工作 PS2',3:'空闲 PS3',4:'深度空闲 PS4'}[ssd('current_state')]??'不可用'));
-            this.stat('自动空闲节能',()=>ssd('apst_enabled')===null?'不可用':ssd('apst_enabled')?'开启':'关闭');
+            this.stat('自动空闲节能',()=>ssd('apst_enabled')==null?'':ssd('apst_enabled')?'开启':'关闭');
             this.buttons([['随电源模式',()=>this.control('ssd-power','follow')],['系统管理',()=>this.control('ssd-power','system')]]);
             this.buttons([['省电',()=>this.control('ssd-power','save')],['均衡',()=>this.control('ssd-power','balanced')],['性能',()=>this.control('ssd-power','performance')]]);
             this.text(()=>this.data.ssd_power?.error??'');
+            const ssdRows=this.body.get_children().slice(ssdStart);
+            this.groups.push(ssdRows);
+            this.updaters.push(()=>{if(!this.data.ssd_power?.available&&!this.data.ssd_power?.error)ssdRows.forEach(r=>r.hide());});
             const opticalStart=this.body.get_n_children();
             this.text(()=>'光驱电源','pou-title');
             const card=box(false,'pou-card');this.body.add_child(card);
@@ -439,7 +459,7 @@ export default class Panasonic extends Extension {
             emblem.add_child(new St.Icon({icon_name:'media-optical-symbolic',icon_size:54}));
             this.text(()=>d().supported?(d().powered?'已供电':'已断电'):'不可用','pou-value',emblem);
             const details=box(true);details.x_expand=true;details.style='spacing: 8px;';card.add_child(details);
-            this.text(()=>d().model??'未检测到光驱','pou-value',details);
+            this.text(()=>d().model??'','pou-value',details);
             this.text(()=>d().details?.capabilities??'','pou-subtitle',details);
             for(const [title,key] of [['光碟','media'],['光碟属性','attributes'],['光碟容量','capacity'],['已用空间','used'],['读写','access']]) this.stat(title,()=>d().details?.[key]??'',details);
             this.stat('默认策略',()=>d().policy==='on'?'保持供电':'空闲时关闭供电');
@@ -447,7 +467,8 @@ export default class Panasonic extends Extension {
             this.buttons([['保持供电',()=>this.control('optical','on')],['自动省电',()=>this.control('optical','auto')]]);
             this.text(()=>d().error||'');
             const opticalRows=this.body.get_children().slice(opticalStart);
-            this.updaters.push(()=>{for(const row of opticalRows) if (!d().supported) row.hide(); else if (!(row instanceof St.Label) || row.text) row.show();});
+            this.groups.push(opticalRows);
+            this.updaters.push(()=>{if(!d().supported&&!d().error)opticalRows.forEach(r=>r.hide());});
         } else if(this.route==='touchpad') {
             this.stat('圆形滚动',()=>this.data.system?.pad_active?'正在运行':'未启用');
             this.buttons([['开启',()=>this.control('enable')],['恢复原生',()=>this.control('disable')]]);

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import threading
 import gi
+from .readings import text as fmt
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gio, GLib, Gdk, Pango, PangoCairo
@@ -20,10 +21,6 @@ def box(vertical=True, spacing=12):
 
 def label(text='', style=None):
     return Gtk.Label(label=text, xalign=0, wrap=True, css_classes=[style] if style else [])
-
-
-def fmt(value, unit=''):
-    return '未提供' if value is None else f'{value}{unit}'
 
 
 class Chart(Gtk.DrawingArea):
@@ -70,7 +67,7 @@ class Chart(Gtk.DrawingArea):
 class App(Adw.Application):
     def __init__(self):
         super().__init__(application_id='io.github.panasonic_on_ubuntu',flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
-        self.data, self.updaters = {}, []
+        self.data, self.updaters, self.cards = {}, [], []
         self.rx_points, self.tx_points, self.net_previous = [], [], None
         self.scales = {}
         self.updating = self.loading = False
@@ -148,7 +145,7 @@ class App(Adw.Application):
     def live(self,key):
         return None if self.get('power','stale') else self.get('power','sample',key)
 
-    def mode(self):return MODES.get(self.get('power','mode'),'系统管理')
+    def mode(self):return MODES.get(self.get('power','mode'),'')
 
     def peripheral_controls(self,page):
         card=self.card(page,'无线与存储策略')
@@ -159,7 +156,7 @@ class App(Adw.Application):
     def text(self,parent,getter,style='pou-note'):
         item=label('',style);parent.append(item)
         def update():
-            value=str(getter())
+            raw=getter();value='' if raw is None else str(raw)
             item.set_label(value)
             item.set_visible(bool(value))
         self.updaters.append(update)
@@ -167,6 +164,7 @@ class App(Adw.Application):
 
     def card(self,page,title):
         card=box();card.add_css_class('card');card.add_css_class('pou-card');page.append(card)
+        self.cards.append(card)
         card.append(label(title,'pou-section'))
         return card
 
@@ -174,16 +172,27 @@ class App(Adw.Application):
         row=box(False);name=label(title,'pou-note');name.set_hexpand(True);row.append(name)
         value=label();value.set_selectable(True);row.append(value);parent.append(row)
         def update():
-            text = getter()
-            row.set_visible(text is not None and text != '')
-            value.set_label('' if text is None else str(text))
+            text = fmt(getter())
+            row.set_visible(bool(text))
+            value.set_label(text)
         self.updaters.append(update)
 
     def metrics(self,parent,items):
         row=box(False);parent.append(row)
         for title,getter in items:
             cell=box();cell.add_css_class('pou-metric');cell.set_hexpand(True)
-            cell.append(label(title,'pou-note'));self.text(cell,getter,'pou-reading');row.append(cell)
+            cell.append(label(title,'pou-note'));reading=label('', 'pou-reading');cell.append(reading);row.append(cell)
+            def update(c=cell,r=reading,g=getter):
+                value=fmt(g());r.set_label(value);c.set_visible(bool(value))
+            self.updaters.append(update)
+        self.updaters.append(lambda:row.set_visible(any(c.get_visible() for c in self.children(row))))
+
+    @staticmethod
+    def children(widget):
+        child=widget.get_first_child()
+        while child:
+            yield child
+            child=child.get_next_sibling()
 
     def actions(self,parent,items):
         if hasattr(Adw,'WrapBox'):
@@ -206,7 +215,9 @@ class App(Adw.Application):
         reading=label('', 'pou-note');card.append(reading)
         def update():
             area.points=[p for p in getter() if len(p)==2 and all(isinstance(n,(int,float)) and math.isfinite(n) for n in p)]
-            reading.set_label(f'最近 {area.points[-1][1]:.3g} {unit}' if area.points else unit)
+            card.set_visible(bool(area.points))
+            area.set_visible(len(area.points)>1)
+            reading.set_label(f'最近 {area.points[-1][1]:.3g} {unit}' if area.points else '')
             area.queue_draw()
         self.updaters.append(update)
 
@@ -270,6 +281,8 @@ class App(Adw.Application):
                 return
             value = getter()
             scale.set_sensitive(value is not None)
+            row.set_visible(bool(fmt(value)))
+            scale.set_visible(bool(fmt(value)))
             if value is not None:
                 scale.set_value(value)
             reading.set_label(fmt(value, unit))
@@ -333,9 +346,11 @@ class App(Adw.Application):
                 syncing = True
                 try:
                     scale.set_sensitive(value >= 0)
+                    scale.set_visible(value >= 0)
+                    reading.set_visible(value >= 0)
                     if value >= 0:
                         scale.set_value(value)
-                    reading.set_label(f'{value}%' if value >= 0 else '亮度不可用')
+                    reading.set_label(f'{value}%' if value >= 0 else '')
                 finally:
                     syncing = False
             bus.call(PANEL, PANEL_PATH, PANEL, 'GetBrightness', None, None,
@@ -355,6 +370,7 @@ class App(Adw.Application):
         self.stat(card,'策略',lambda:{'follow':'随电源模式','system':'系统管理','save':'省电','balanced':'均衡','performance':'性能'}.get(self.get('ssd_power','requested'),'等待服务'))
         self.actions(card,[(title,lambda m=mode:self.control('ssd-power',m)) for mode,title in [('follow','随电源模式'),('save','省电'),('balanced','均衡'),('performance','性能'),('system','系统管理')]])
         self.text(card,lambda:self.get('ssd_power','error') or '')
+        self.updaters.append(lambda:card.set_visible(bool(self.get('ssd_power','available') or self.get('ssd_power','error'))))
 
     def devices(self,parent,kind,action):
         dropdown=Gtk.DropDown(hexpand=True)
@@ -372,6 +388,7 @@ class App(Adw.Application):
                 items=devices
                 dropdown.set_model(Gtk.StringList.new([d['name'] for d in devices]))
             dropdown.set_sensitive(bool(devices))
+            dropdown.set_visible(bool(devices))
             dropdown.set_selected(next((i for i,d in enumerate(devices) if d['default']),Gtk.INVALID_LIST_POSITION))
         self.updaters.append(update)
 
@@ -417,7 +434,8 @@ class App(Adw.Application):
             self.metrics(page,[('平台功耗',lambda:fmt(self.live('platform_w'),' W')),('封装功率',lambda:fmt(self.live('watts'),' W')),('忙碌频率',lambda:fmt(self.live('busy_mhz'),' MHz'))])
             card=self.card(page,'性能预设')
             self.stat(card,'当前预设',self.mode)
-            self.stat(card,'长期 / 短时上限',lambda:f"{fmt(self.get('power','pl1_w'))} / {fmt(self.get('power','pl2_w'))} W")
+            self.stat(card,'长期功率上限',lambda:fmt(self.get('power','pl1_w'),' W'))
+            self.stat(card,'短时功率上限',lambda:fmt(self.get('power','pl2_w'),' W'))
             self.actions(card,[(title,lambda m=mode:self.control('cpu',m)) for mode,title in [('eco','省电 6 W'),('balanced','均衡 12 W'),('performance','性能 20 W'),('adaptive','温控性能'),('boost','增强 25 W'),('system','系统管理')]])
             self.text(card,lambda:self.get('power','error') or '')
             self.peripheral_controls(page)
@@ -455,8 +473,9 @@ class App(Adw.Application):
                 target = ['set-sink-volume','@DEFAULT_SINK@'] if action=='volume' else ['set-source-volume','@DEFAULT_SOURCE@']
                 self.slider(card,'音量',lambda k=kind:self.output(k).get('volume'),target,
                             command=lambda v,t=target:['/usr/bin/pactl',*t,f'{v}%'])
-                self.stat(card,'静音',lambda k=kind:'已静音' if self.output(k).get('mute') else '未静音')
+                self.stat(card,'静音',lambda k=kind:('已静音' if self.output(k).get('mute') else '未静音') if self.output(k) else None)
                 self.actions(card,[('切换静音',lambda m=mute:self.execute(['/usr/bin/pou','audio',m,'toggle']))])
+                self.updaters.append(lambda c=card,k=kind:c.set_visible(bool(self.output(k))))
             card=self.card(page,'音频设备');self.actions(card,[('选择输入 / 输出设备',lambda:self.settings('sound'))])
         elif key=='display':
             card=self.card(page,'内置显示屏');self.brightness_control(card)
@@ -537,7 +556,7 @@ class App(Adw.Application):
             emblem.append(Gtk.Image(icon_name='media-optical-symbolic',pixel_size=64))
             self.text(emblem,lambda:'已供电' if self.get('optical','powered') else '已断电' if self.get('optical','supported') else '不可用','pou-section')
             details=box();details.set_hexpand(True);row.append(details)
-            self.text(details,lambda:self.get('optical','model') or '未检测到光驱','pou-section')
+            self.text(details,lambda:self.get('optical','model') or '','pou-section')
             self.text(details,lambda:self.get('optical','details','capabilities') or '')
             for title,field in [('光碟','media'),('光碟属性','attributes'),('光碟容量','capacity'),('已用空间','used'),('读写','access')]:
                 self.stat(details,title,lambda f=field:self.get('optical','details',f))
@@ -548,7 +567,8 @@ class App(Adw.Application):
         elif key=='storage':
             self.metrics(page,[('已用空间',lambda:fmt(self.get('hardware','root_used_gb'),' GB')),('总容量',lambda:fmt(self.get('hardware','root_total_gb'),' GB'))])
             card=self.card(page,'NVMe 空闲电源管理')
-            self.text(card,lambda:'\n\n'.join(f"{d.get('model') or d['name']}\n允许唤醒延迟：{d['value']} µs" for d in self.get('peripherals','devices') or [] if d['kind']=='nvme') or '未检测到可用的 NVMe APST 控制接口。')
+            self.text(card,lambda:'\n\n'.join(f"{d.get('model') or d['name']}\n允许唤醒延迟：{d['value']} µs" for d in self.get('peripherals','devices') or [] if d['kind']=='nvme'))
+            self.updaters.append(lambda:card.set_visible(any(d['kind']=='nvme' for d in self.get('peripherals','devices') or [])))
             self.peripheral_controls(page)
             self.ssd_controls(page)
 
@@ -617,7 +637,10 @@ class App(Adw.Application):
     def render_values(self):
         self.updating=True
         try:
+            for card in self.cards:card.set_visible(True)
             for update in self.updaters:update()
+            for card in self.cards:
+                if not any(c.get_visible() for c in list(self.children(card))[1:]):card.set_visible(False)
         finally:self.updating=False
 
 

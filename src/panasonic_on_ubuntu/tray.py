@@ -12,8 +12,9 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('AyatanaAppIndicator3', '0.1')
 from gi.repository import Gtk, GLib, AyatanaAppIndicator3 as AppIndicator
 from .battery import snapshot
-from .firmware import status as firmware_status, fan_label
+from .firmware import status as firmware_status
 from .desktop import backlight
+from .readings import text as reading
 
 
 def query(argv):
@@ -25,6 +26,12 @@ def query(argv):
 
 
 class Tray:
+    @staticmethod
+    def readout(item, title, value):
+        value = reading(value)
+        item.set_label(title+'：'+value if value else '')
+        item.set_visible(bool(value))
+
     def __init__(self):
         self.busy = False
         self.indicator = AppIndicator.Indicator.new('panasonic-on-ubuntu', 'pou-symbolic', AppIndicator.IndicatorCategory.HARDWARE)
@@ -210,50 +217,50 @@ class Tray:
                  '放电功率 · '+display['discharge_power'] if display['discharge_power'] else '')
         self.watts.set_label(watts)
         self.watts.set_visible(bool(watts))
-        self.contract.set_label('PD 协商档位 · '+source.get('contract_label','—'))
-        self.pdo_choices.set_label('适配器固定档位 · '+source.get('profiles_label','—'))
+        self.readout(self.contract, 'PD 协商档位', source.get('contract_label'))
+        self.readout(self.pdo_choices, '适配器固定档位', source.get('profiles_label'))
         input_power = source.get('input_label', '')
         self.input_power.set_label('实时输入功率 · '+input_power if input_power else '')
         self.input_power.set_visible(bool(input_power))
-        self.care.set_label(f"{care.get('label','电池服务未运行')} · 上限 {care.get('config',{}).get('limit','—')}%")
+        self.readout(self.care, '电池保养', ' · '.join(filter(None, (reading(care.get('label')), reading(care.get('config',{}).get('limit'),'%')))))
         if data['batteries']:
             b = data['batteries'][0]
             capacity = b['fields']['capacity']['value']
-            percent = str(int(float(capacity))) + '%' if capacity is not None else '—'
+            percent = str(int(float(capacity))) + '%' if capacity is not None else ''
             status = b['fields']['status']['value']
             state = {'Charging': '充电中', 'Discharging': '放电中', 'Full': '已充满', 'Not charging': '未充电'}.get(status, status or '未知')
-            text = f"{percent} · {display['summary']}"
+            text = ' · '.join(filter(None,(percent,display['summary'])))
             self.indicator.set_icon_full('pou-symbolic', text)
             self.indicator.set_label(percent, '100%')
             self.summary.set_label(text)
         else:
-            self.indicator.set_label('—', '100%')
+            self.indicator.set_label('', '100%')
             self.summary.set_label('未检测到电池')
         current = values['profile']
-        self.profile.set_label('系统电源：' + {'balanced': '均衡', 'performance': '性能', 'power-saver': '省电'}.get(current, '未知'))
+        self.readout(self.profile, '系统电源', {'balanced': '均衡', 'performance': '性能', 'power-saver': '省电'}.get(current))
         for value, (item, label) in self.profiles.items():
             item.set_label(('✓ ' if current == value else '') + label)
             item.set_sensitive(value in values['profiles'])
         self.pad.set_label('圆形滚动：' + ('运行中' if values['pad'] == 'active' else '未启用'))
         from .power import status as power_status
         active_fan = power_status().get('fan', {})
-        name = {'custom':'自定义曲线','performance':'性能曲线','manual':'手动输出'}.get(active_fan.get('mode'),fan_label(fw['fan_profile']))
+        name = {'custom':'自定义曲线','performance':'性能曲线','manual':'手动输出'}.get(active_fan.get('mode'),{0:'标准自动曲线',1:'静音自动曲线'}.get(fw['fan_profile'],''))
         feedback = active_fan.get('feedback')
-        self.fan.set_label('风扇：' + name + (f' · {feedback}%' if feedback is not None else ''))
+        self.readout(self.fan,'风扇',' · '.join(filter(None,(name,reading(feedback,'%')))))
         self.performance_fan.set_sensitive(bool(active_fan.get('available')))
         for item in self.fan_actions:
             item.set_sensitive(fw['fan_profile'] in (0, 1))
-        self.limits.set_label('固件动态功率限制：' + {0: '关闭', 1: '开启'}.get(fw['power_limits_enabled'], '未知'))
+        self.readout(self.limits,'固件动态功率限制',{0: '关闭', 1: '开启'}.get(fw['power_limits_enabled']))
         from .optical import status as optical_status
         optical = optical_status()
-        self.optical.set_label('光驱：' + ('已供电' if optical['powered'] else '已断电' if optical['supported'] else '电源控制不可用'))
-        self.volume.set_label('输出：' + (values['volume'].replace('Volume:', '音量').replace('[MUTED]', '（静音）') or '不可用'))
-        self.mic.set_label('麦克风：' + ('已静音' if '[MUTED]' in values['mic'] else '开启' if values['mic'] else '不可用'))
-        self.wifi.set_label('Wi-Fi：' + {'enabled': '开启', 'disabled': '关闭'}.get(values['wifi'], '未知'))
+        self.readout(self.optical,'光驱',('已供电' if optical['powered'] else '已断电') if optical['supported'] else None)
+        self.readout(self.volume,'输出',values['volume'].replace('Volume:', '音量').replace('[MUTED]', '（静音）'))
+        self.readout(self.mic,'麦克风','已静音' if '[MUTED]' in values['mic'] else '开启' if values['mic'] else None)
+        self.readout(self.wifi,'Wi-Fi',{'enabled': '开启', 'disabled': '关闭'}.get(values['wifi']))
         bt = values['bluetooth']
-        self.bluetooth.set_label('蓝牙：' + ('开启' if 'Powered: yes' in bt else '关闭' if 'Powered: no' in bt else '不可用'))
+        self.readout(self.bluetooth,'蓝牙','开启' if 'Powered: yes' in bt else '关闭' if 'Powered: no' in bt else None)
         percent = values['brightness']
-        self.brightness.set_label('内屏亮度：' + ('不可用' if percent is None else str(percent) + '%'))
+        self.readout(self.brightness,'内屏亮度',reading(percent,'%'))
         for item in self.brightness_actions:
             item.set_sensitive(percent is not None)
         return False
