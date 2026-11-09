@@ -206,8 +206,10 @@ class Tray:
         display = describe(data,care,values.get('battery_samples', []))
         self.supply.set_label(display['source'])
         self.charge_status.set_label(display['status'])
-        self.watts.set_label(display['power'])
-        self.watts.set_visible(bool(display['power']))
+        watts = ('充电功率 · '+display['charge_power'] if display['charge_power'] else
+                 '放电功率 · '+display['discharge_power'] if display['discharge_power'] else '')
+        self.watts.set_label(watts)
+        self.watts.set_visible(bool(watts))
         self.contract.set_label('PD 协商档位 · '+source.get('contract_label','—'))
         self.pdo_choices.set_label('适配器固定档位 · '+source.get('profiles_label','—'))
         self.input_power.set_label('接口实测输入功率 · '+source.get('input_label','硬件未提供'))

@@ -354,7 +354,8 @@ export default class Panasonic extends Extension {
             this.text(()=>fmt(this.value('capacity'),'%'),'pou-hero');
             this.stat('供电',()=>this.data.power_summary?.source??'');
             this.stat('充放电',()=>this.data.power_summary?.status??'');
-            this.text(()=>this.data.battery?.power_input?.measured_input_w == null ? this.data.power_summary?.power??'' : '');
+            this.stat('充电功率',()=>this.data.power_summary?.charge_power??'');
+            this.stat('放电功率',()=>this.data.power_summary?.discharge_power??'');
             this.stat('PD 协商电压',()=>this.data.battery?.power_input?.voltage_label??'');
             this.stat('实时输入功率',()=>['dc','typec','external'].includes(this.data.battery?.power_input?.source)?this.data.battery.power_input.input_label:'');
             this.stat('PD 合约',()=>this.data.battery?.power_input?.contract_details??'');

@@ -52,6 +52,19 @@ class PowerPresentationTests(unittest.TestCase):
         self.assertIn('80%',self.summary('dc','Not charging',target=80,capacity=81)['status'])
         self.assertEqual(self.summary('dc','Full',capacity=100)['status'],'已充满')
 
+    def test_battery_power_rows_remain_separate_from_adapter_input(self):
+        for source in ('battery', 'dc', 'typec'):
+            for status, charge, discharge in [('Charging', '8.5 W', ''), ('Discharging', '', '8.5 W'),
+                                               ('Full', '', ''), ('Not charging', '', '')]:
+                snapshot = {'power_input':{'source':source, 'measured_input_w':30},
+                            'batteries':[{'fields':{'status':{'value':status}},
+                                          'metrics':{'battery_power_w':8.5}}]}
+                data = describe(snapshot, {})
+                self.assertEqual(data['charge_power'], charge)
+                self.assertEqual(data['discharge_power'], discharge)
+        self.assertEqual(self.summary('dc', 'Charging', 0)['charge_power'], '0 W')
+        self.assertEqual(self.summary('battery', 'Discharging', None)['discharge_power'], '')
+
     def test_discharge_when_adapter_is_present(self):
         data=self.summary('dc','Discharging',5,capacity=47,energy_now=15000000,power_now=5000000)
         self.assertIn('DC 已连接',data['source'])

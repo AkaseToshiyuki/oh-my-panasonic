@@ -47,7 +47,8 @@ def describe(snapshot, care, samples=()):
             'battery':'电池供电', 'unknown':'供电来源待确认'}[source]
     items = snapshot.get('batteries') or []
     if not items:
-        return {'source':name, 'status':'未检测到电池', 'summary':name, 'power':''}
+        return {'source':name, 'status':'未检测到电池', 'summary':name, 'power':'',
+                'charge_power':'', 'discharge_power':''}
     fields = items[0]['fields']
     from .battery_estimate import rates as recent_rates
     rates = recent_rates(snapshot, samples) if samples else {}
@@ -59,6 +60,7 @@ def describe(snapshot, care, samples=()):
     if phase in ('maintenance-full', 'full'):
         target = 100
     watts = items[0].get('metrics', {}).get('battery_power_w')
+    battery_power = f'{abs(watts):g} W' if isinstance(watts, (int, float)) and math.isfinite(watts) else ''
     reading = supply.get('measured_input_w')
     power = f'取电 {reading:g} W' if reading is not None else ''
     if status == 'Discharging':
@@ -94,4 +96,6 @@ def describe(snapshot, care, samples=()):
                 if port.get('protocol') in ('PD', 'PD_PPS') and minimum and contract and 0 < contract < minimum:
                     state = 'PD 供电不足，等待充电'
     return {'source':name, 'status':state, 'power':power,
+            'charge_power':battery_power if status == 'Charging' else '',
+            'discharge_power':battery_power if status == 'Discharging' else '',
             'summary':' · '.join(filter(None,(name,power,state)))}

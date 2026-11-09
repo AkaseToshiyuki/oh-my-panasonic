@@ -389,9 +389,9 @@ def run():
         last_start=time.monotonic()
         log.info('starting hardware sampler: %s',reason)
         try:
-            columns = 'Busy%,Bzy_MHz,Avg_MHz,PkgWatt,PkgTmp'
-            if any(read(p) == 'psys' for p in Path('/sys/class/powercap').glob('intel-rapl:*/name')):
-                columns += ',SysWatt'
+            # A missing powercap psys directory does not mean the counter is
+            # unavailable. Let turbostat probe its own perf/MSR sources.
+            columns = 'Busy%,Bzy_MHz,Avg_MHz,PkgWatt,PkgTmp,SysWatt'
             process=subprocess.Popen(['/usr/bin/turbostat','--quiet','--Summary','--interval','2','--show',columns,'--out','/dev/stdout'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,bufsize=0)
             selector.register(process.stdout,selectors.EVENT_READ)
         except OSError as exc:log.warning('sampler start failed: %s',exc)
