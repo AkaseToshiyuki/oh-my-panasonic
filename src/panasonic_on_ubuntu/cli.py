@@ -15,7 +15,7 @@ def main():
     if args.action not in ('audio','gui') and args.parameters:
         parser.error('Unexpected arguments')
     if args.action == 'gui':
-        if len(args.parameters)>1 or (args.parameters and args.parameters[0] not in ('overview','battery','cpu','fan','network','bluetooth','audio','display','touchpad','storage','face')):
+        if len(args.parameters)>1 or (args.parameters and args.parameters[0] not in ('overview','battery','cpu','fan','network','bluetooth','audio','display','touchpad','storage','indicator','face')):
             parser.error('Unknown panel page')
         from .gui import run
         run(args.parameters[0] if args.parameters else None)

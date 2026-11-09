@@ -9,7 +9,7 @@ from collect_rust_licenses import collect
 from rust_build import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.21.1'
+VERSION = '0.22.0'
 
 def build():
     wheelpad = ROOT/'vendor/letsnote-wheelpad'
@@ -54,6 +54,8 @@ def build():
         put('packaging/pou-power-sleep','usr/lib/systemd/system-sleep/pou-power',0o755)
         put('packaging/pou-battery-sleep','usr/lib/systemd/system-sleep/pou-battery',0o755)
         put('assets/pou-symbolic.svg', 'usr/share/icons/hicolor/scalable/status/pou-symbolic.svg')
+        for name in ('pou-touchpad-symbolic.svg','pou-empty-symbolic.svg'):
+            put('assets/'+name,'usr/share/icons/hicolor/scalable/status/'+name)
         put('packaging/io.github.panasonic_on_ubuntu.policy', 'usr/share/polkit-1/actions/io.github.panasonic_on_ubuntu.policy')
         put('packaging/50-pou-adjust.rules', 'usr/share/polkit-1/rules.d/50-pou-adjust.rules')
         put('packaging/io.github.panasonic_on_ubuntu.face.policy', 'usr/share/polkit-1/actions/io.github.panasonic_on_ubuntu.face.policy')

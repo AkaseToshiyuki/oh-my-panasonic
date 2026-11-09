@@ -34,7 +34,14 @@ def load():
         return DEFAULT.copy()
 
 
-def save(items):
+def icon_enabled():
+    try:
+        value=json.loads(path().read_text(encoding='utf-8'))
+        return not isinstance(value,dict) or value.get('touchpad_icon') is not False
+    except (OSError,ValueError):return True
+
+
+def save(items, touchpad_icon=None):
     if not isinstance(items, list) or normalize(items) != items:
         raise ValueError('最多选择五项状态信息')
     target = path()
@@ -44,7 +51,7 @@ def save(items):
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=target.parent,
                                          prefix='.statusbar-', delete=False) as output:
             name = output.name
-            json.dump({'items':items}, output, ensure_ascii=False)
+            json.dump({'items':items,'touchpad_icon':icon_enabled() if touchpad_icon is None else bool(touchpad_icon)}, output, ensure_ascii=False)
         os.replace(name, target)
     finally:
         if name:
@@ -76,14 +83,17 @@ class FallbackReadout:
                 info={line.split(':')[0]:int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()}
                 if info['MemTotal']>0:values['memory']=100*(1-info['MemAvailable']/info['MemTotal'])
             except (OSError,ValueError,KeyError):pass
-        if any(k in items for k in ('cpu_power','platform_power','temperature')):
+        if any(k in items for k in ('cpu_power','platform_power','temperature','remaining')):
             power=status()
             if not power.get('stale'):
                 sample=power.get('sample') or {}
                 values.update(cpu_power=sample.get('watts'),platform_power=sample.get('platform_w'),temperature=sample.get('temperature'))
         battery=(snapshot.get('batteries') or [{}])[0];fields=battery.get('fields',{})
         values['battery']=number(fields,'capacity')
+        energy=number(fields,'energy_now')
+        values['energy']=energy/1e6 if energy is not None else None
         state=fields.get('status',{}).get('value');charging=state=='Charging'
+        values['discharging']=state=='Discharging'
         watts=battery.get('metrics',{}).get('battery_power_w')
         if state in ('Charging','Discharging'):values['battery_power']=abs(watts) if watts is not None else None
         if state=='Discharging':
@@ -101,13 +111,18 @@ def render(items, values, charging=False):
     result=[]
     for key in normalize(items):
         n=values.get(key)
+        if key=='remaining' and not (isinstance(n,(int,float)) and n>0):
+            energy,power=values.get('energy'),values.get('platform_power')
+            if isinstance(energy,(int,float)) and isinstance(power,(int,float)) and energy>0 and power>0:n=3600*energy/power
         if not isinstance(n,(int,float)) or not math.isfinite(n) or n<0:continue
         if key in ('battery','cpu','memory'):
-            if n<=100:result.append(f"{dict(battery='',cpu='CPU ',memory='内存 ')[key]}{math.floor(n+.5)}%")
+            if n<=100:
+                number=f'{n:.1f}' if key=='cpu' else str(math.floor(n+.5))
+                result.append(f"{dict(battery='',cpu='CPU ',memory='内存 ')[key]}{number}%")
         elif key=='remaining':
             if 0<n<7*86400:
                 minutes=max(1,math.ceil(n/60));hours,minutes=divmod(minutes,60)
-                result.append('剩余 '+(f'{hours}h' if hours else '')+(f'{minutes}m' if minutes else ''))
+                result.append(('剩余 ' if values.get('discharging') else '约 ')+(f'{hours}h' if hours else '')+(f'{minutes}m' if minutes else ''))
         elif key=='temperature':
             if n<=150:result.append(f'{math.floor(n+.5)}°C')
         elif n<=1000:

@@ -17,9 +17,23 @@ for(const [now,mono] of [[113,51],[101,59],[101,49],[97,51]])assert.deepEqual(po
 const battery={IsPresent:true,State:2,EnergyRate:10,Energy:30,Percentage:85,TimeToEmpty:0};
 const data=batteryValues(k=>battery[k]);
 assert.equal(data.remaining,10800);
-assert.equal(render(['battery','remaining','battery_power','cpu','cpu_power'],{...data,cpu:20,cpu_power:0}),'85% · 剩余 3h · 放电 10.0W · CPU 20% · CPU 0.0W');
+assert.equal(render(['battery','remaining','battery_power','cpu','cpu_power'],{...data,cpu:20,cpu_power:0}),'85% · 剩余 3h · 放电 10.0W · CPU 20.0% · CPU 0.0W');
 battery.State=1;
 assert.equal(render(['remaining','battery_power'],batteryValues(k=>battery[k])),'充电 10.0W');
 assert.equal(render(['cpu','battery','memory','temperature','platform_power'],{cpu:NaN,battery:101,memory:-1,temperature:151,platform_power:Infinity}),'');
 assert.equal(render([],data),'');
+assert.equal(render(['remaining'],{energy:30,platform_power:10,discharging:false}),'约 3h');
+assert.equal(render(['remaining'],{energy:30,cpu_power:2,discharging:false}),'');
+assert.equal(render(['cpu'],{cpu:.3}),'CPU 0.3%');
 console.log('Statusbar formatting, stale readings and selection checks passed');
+const touch=await readFile(new URL('../extension/touchpad-state.js',import.meta.url),'utf8');
+const {parseState,pulseKind,position}=await import('data:text/javascript;base64,'+Buffer.from(touch).toString('base64'));
+const frame={points:[[30,50],[70,50]],scroll:-1,click:1,tap:0,fingers:2,seq:1};
+assert.deepEqual(parseState(JSON.stringify(frame)),frame);
+assert.equal(pulseKind(frame,true,'fingers'),2);
+assert.equal(pulseKind(frame,true,'areas'),1);
+assert.equal(pulseKind({...frame,click:0,tap:2},false,'fingers'),0);
+for(const invalid of [{...frame,scroll:3},{...frame,points:[[NaN,2]]},{...frame,seq:-1},{...frame,points:[[1,2],[3,4],[5,6]]}])
+    assert.throws(()=>parseState(JSON.stringify(invalid)));
+assert.ok(Math.hypot(...position([100,100],10))<=6.61);
+console.log('Touchpad frame validation and gesture rendering checks passed');

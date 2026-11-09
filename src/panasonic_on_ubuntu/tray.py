@@ -34,7 +34,7 @@ class Tray:
 
     def __init__(self):
         self.busy = False
-        self.indicator = AppIndicator.Indicator.new('panasonic-on-ubuntu', 'pou-symbolic', AppIndicator.IndicatorCategory.HARDWARE)
+        self.indicator = AppIndicator.Indicator.new('panasonic-on-ubuntu', 'pou-empty-symbolic', AppIndicator.IndicatorCategory.HARDWARE)
         self.indicator.set_title('Oh My Panasonic')
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         self.menu = Gtk.Menu()
@@ -237,10 +237,11 @@ class Tray:
             status = b['fields']['status']['value']
             state = {'Charging': '充电中', 'Discharging': '放电中', 'Full': '已充满', 'Not charging': '未充电'}.get(status, status or '未知')
             text = ' · '.join(filter(None,(percent,display['summary'])))
-            self.indicator.set_icon_full('pou-symbolic', text)
             self.summary.set_label(text)
         else:
             self.summary.set_label('未检测到电池')
+        from .statusbar import icon_enabled
+        self.indicator.set_icon_full('pou-touchpad-symbolic' if values.get('pad')=='active' and icon_enabled() else 'pou-empty-symbolic',self.summary.get_label())
         self.indicator.set_label(values.get('compact',''), '')
         current = values['profile']
         self.readout(self.profile, '系统电源', {'balanced': '均衡', 'performance': '性能', 'power-saver': '省电'}.get(current))

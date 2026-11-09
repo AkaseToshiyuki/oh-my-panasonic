@@ -33,8 +33,22 @@ class StatusbarTests(unittest.TestCase):
             self.assertEqual(len(statusbar.load()),5)
 
     def test_compact_values_hide_missing_and_keep_zero(self):
-        values={'battery':85,'cpu':20,'remaining':10800,'battery_power':10,'cpu_power':0}
-        self.assertEqual(statusbar.render(list(values),values),'85% · CPU 20% · 剩余 3h · 放电 10.0W · CPU 0.0W')
+        values={'battery':85,'cpu':20,'remaining':10800,'battery_power':10,'cpu_power':0,'discharging':True}
+        self.assertEqual(statusbar.render(list(values),values),'85% · CPU 20.0% · 剩余 3h · 放电 10.0W · CPU 0.0W')
         self.assertEqual(statusbar.render(['battery_power'],values,True),'充电 10.0W')
         self.assertEqual(statusbar.render(['temperature','cpu_power'],{'temperature':float('nan'),'cpu_power':None}),'')
         self.assertEqual(statusbar.render([],values),'')
+
+    def test_external_power_estimate_requires_platform_power(self):
+        self.assertEqual(statusbar.render(['remaining'],{'energy':30,'platform_power':10}),'约 3h')
+        self.assertEqual(statusbar.render(['remaining'],{'energy':30,'cpu_power':2}),'')
+
+    def test_icon_choice_defaults_on_and_survives_item_changes(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ,XDG_CONFIG_HOME=directory):
+            self.assertTrue(statusbar.icon_enabled())
+            statusbar.save(['battery'],touchpad_icon=False)
+            statusbar.save(['cpu'])
+            self.assertFalse(statusbar.icon_enabled())
+            self.assertEqual(statusbar.load(),['cpu'])
+            statusbar.save(['cpu'],touchpad_icon=True)
+            self.assertTrue(statusbar.icon_enabled())

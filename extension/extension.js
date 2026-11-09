@@ -2,6 +2,7 @@ import St from 'gi://St';
 import {fmt} from './readings.js';
 import {FaceConsent} from './face.js';
 import {CompactStatus} from './statusbar.js';
+import {TouchpadIndicator} from './touchpad.js';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -101,9 +102,12 @@ export default class Panasonic extends Extension {
         this.cpuPoints = []; this.rxPoints = []; this.txPoints = []; this.sources = new Set(); this.processes = new Set();
         this.button = new PanelMenu.Button(0, 'Oh My Panasonic');
         const top = box(false, 'pou-panel-box');
-        top.add_child(new St.Icon({gicon: Gio.icon_new_for_string(`${this.path}/pou-symbolic.svg`), style_class: 'system-status-icon'}));
+        this.touchpadIndicator=new TouchpadIndicator(()=>this.syncIndicator());
+        top.add_child(this.touchpadIndicator.area);
         this.percent = label(''); top.add_child(this.percent); this.button.add_child(top);
-        this.compact = new CompactStatus(this.percent);
+        this.compact = new CompactStatus(this.percent,enabled=>{
+            this.touchpadIconEnabled=enabled;this.touchpadIndicator.setEnabled(enabled && !this.hidden);
+        },()=>this.syncIndicator());
         Main.panel.addToStatusArea(this.uuid, this.button);
         if (GLib.file_test(GLib.build_filenamev([GLib.get_user_config_dir(),'panasonic-on-ubuntu','indicator-hidden']),GLib.FileTest.EXISTS))
             this.hide();
@@ -120,7 +124,7 @@ export default class Panasonic extends Extension {
                 });
             } else this.stopTelemetry();
         });
-        this.dbus = Gio.DBusExportedObject.wrapJSObject(XML, {Show: () => this.show(), Hide: () => this.hide(), Open: page => {this.show(); this.page(page); this.button.menu.open();}, SetBrightness: p => this.setScreenPercent(p), GetBrightness: () => this.screenPercent() ?? -1, Inspect: () => JSON.stringify({ready: !!this.data.timestamp, page: this.route, visible: !this.hidden, errors: this.data.errors ?? {}, sections: ['battery','network','bluetooth','audio','power','touchpad','display']})});
+        this.dbus = Gio.DBusExportedObject.wrapJSObject(XML, {Show: () => this.show(), Hide: () => this.hide(), Open: page => {this.show(); this.page(page); this.button.menu.open();}, SetBrightness: p => this.setScreenPercent(p), GetBrightness: () => this.screenPercent() ?? -1, Inspect: () => JSON.stringify({ready: !!this.data.timestamp, page: this.route, visible: !this.hidden, errors: this.data.errors ?? {}, readout: this.percent.text, readoutItems: this.compact?.items ?? [], touchpadActive: this.touchpadIndicator?.area.visible ?? false, version: '0.22.0', sections: ['battery','network','bluetooth','audio','power','touchpad','display']})});
         this.dbus.export(Gio.DBus.session, '/io/github/panasonic_on_ubuntu/Panel');
         this.owner = Gio.bus_own_name_on_connection(Gio.DBus.session, BUS, Gio.BusNameOwnerFlags.NONE, null, null);
         this.page('home'); this.watchBattery();
@@ -143,8 +147,9 @@ export default class Panasonic extends Extension {
                 } catch (e) { if (!cancelled.is_cancelled()) console.error(e); }
             });
     }
-    show() { this.hidden = false; this.button.show(); this.compact?.setVisible(true); }
-    hide() { this.hidden = true; this.button.menu.close(); this.button.hide(); this.compact?.setVisible(false); }
+    syncIndicator() { if(this.alive && this.button) this.button.visible=!this.hidden && (this.percent.visible || this.touchpadIndicator?.area.visible); }
+    show() { this.hidden = false; this.compact?.setVisible(true);this.touchpadIndicator?.setEnabled(this.touchpadIconEnabled!==false);this.syncIndicator(); }
+    hide() { this.hidden = true; this.button.menu.close();this.compact?.setVisible(false);this.touchpadIndicator?.setEnabled(false);this.button.hide(); }
     stopTelemetry() {
         const worker = this.telemetryWorker;
         this.telemetryWorker = null;
@@ -603,6 +608,7 @@ export default class Panasonic extends Extension {
         this.alive=false;if(this.timer)GLib.Source.remove(this.timer);this.timer=0;
         this.stopTelemetry();
         this.compact?.destroy();this.compact=null;
+        this.touchpadIndicator?.destroy();this.touchpadIndicator=null;
         this.batteryCancel?.cancel();this.batteryCancel=null;
         if(this.batteryChanged)this.batteryProxy?.disconnect(this.batteryChanged);
         if(this.batteryOwner)this.batteryProxy?.disconnect(this.batteryOwner);

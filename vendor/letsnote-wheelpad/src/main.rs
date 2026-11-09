@@ -17,6 +17,7 @@ use letsnote_wheelpad::fsm::Action;
 use letsnote_wheelpad::proxy::FrameProcessor;
 use letsnote_wheelpad::runtime::{InstanceLock, LoopExit, ResumeMonitor, ShutdownSignal};
 use letsnote_wheelpad::uinput::{UinputTouchpad, UinputWheel};
+use letsnote_wheelpad::status::{Observer, Publisher};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -37,6 +38,10 @@ struct Args {
     /// Increase logging verbosity to DEBUG.
     #[arg(long)]
     debug: bool,
+
+    /// Optional local socket for visual touchpad feedback.
+    #[arg(long)]
+    status_socket: Option<PathBuf>,
 }
 
 fn main() {
@@ -185,6 +190,12 @@ fn run(args: Args) -> Result<()> {
         &confirmed_snapshot,
     );
 
+    let mut observer = Observer::new([input.abs_x_min,input.abs_x_max,input.abs_y_min,input.abs_y_max]);
+    let mut status = args.status_socket.and_then(|path| match Publisher::bind(&path) {
+        Ok(publisher)=>Some(publisher),
+        Err(error)=>{ warn!(%error,"visual feedback unavailable"); None }
+    });
+
     // 7. Notify systemd only after the grab has been rechecked and all
     //    proxy state is initialized.
     startup.mark_processor_initialized();
@@ -202,6 +213,8 @@ fn run(args: Args) -> Result<()> {
         &mut shutdown,
         &mut config,
         &config_request,
+        &mut observer,
+        &mut status,
     );
     info!(reason = %exit, "input loop stopped");
     if exit.is_success() {
@@ -284,6 +297,8 @@ fn run_event_loop(
     shutdown: &mut ShutdownSignal,
     config: &mut Config,
     config_request: &ConfigRequest,
+    observer: &mut Observer,
+    status: &mut Option<Publisher>,
 ) -> LoopExit {
     let raw_fd = input.device.as_raw_fd();
     let mut routed_events = Vec::new();
@@ -306,15 +321,19 @@ fn run_event_loop(
         if heartbeat.elapsed() >= std::time::Duration::from_secs(2) {
             let _ = libsystemd::daemon::notify(false, &[libsystemd::daemon::NotifyState::Watchdog]);
             heartbeat = std::time::Instant::now();
+            if let Some(status)=status { status.maintain(); }
         }
-        let (input_revents, signal_revents) = {
+        let (input_revents, signal_revents, status_revents) = {
             // SAFETY: raw_fd is owned by `input.device` which outlives
             // this poll call; no access occurs through the borrowed FD.
             let borrowed = unsafe { BorrowedFd::borrow_raw(raw_fd) };
             let signal_fd = shutdown.fd().as_fd();
+            // The optional listener remains owned by status for this poll.
+            let status_fd = unsafe { BorrowedFd::borrow_raw(status.as_ref().map_or(raw_fd,Publisher::fd)) };
             let mut fds = [
                 PollFd::new(&borrowed, PollFlags::POLLIN),
                 PollFd::new(&signal_fd, PollFlags::POLLIN),
+                PollFd::new(&status_fd, if status.is_some() { PollFlags::POLLIN } else { PollFlags::empty() }),
             ];
             let result = poll(&mut fds, 1_000);
             // Check before consuming queued input or synthesizing a frame:
@@ -340,6 +359,8 @@ fn run_event_loop(
                         vtouchpad,
                         vwheel,
                         &mut routed_events,
+                        observer,
+                        status,
                     ) {
                         return exit;
                     }
@@ -352,8 +373,13 @@ fn run_event_loop(
             (
                 fds[0].revents().unwrap_or_else(PollFlags::empty),
                 fds[1].revents().unwrap_or_else(PollFlags::empty),
+                fds[2].revents().unwrap_or_else(PollFlags::empty),
             )
         };
+
+        if status_revents.contains(PollFlags::POLLIN) {
+            if let Some(status)=status { status.accept(); }
+        }
 
         if signal_revents.contains(PollFlags::POLLIN) {
             match shutdown.read_requested() {
@@ -402,6 +428,8 @@ fn run_event_loop(
                 vtouchpad,
                 vwheel,
                 &mut routed_events,
+                observer,
+                status,
             ) {
                 return exit;
             }
@@ -416,6 +444,8 @@ fn process_and_emit(
     vtouchpad: &mut UinputTouchpad,
     vwheel: &mut UinputWheel,
     routed_events: &mut Vec<evdev::InputEvent>,
+    observer: &mut Observer,
+    status: &mut Option<Publisher>,
 ) -> Option<LoopExit> {
     let action = match processor.process_frame(frame, scroll, routed_events) {
         Ok(action) => action,
@@ -438,6 +468,10 @@ fn process_and_emit(
     }
     if let Err(source) = vtouchpad.forward(routed_events) {
         return Some(LoopExit::VirtualTouchpadFailed { source });
+    }
+    if let Some(status)=status {
+        let now=std::time::Instant::now();
+        status.publish(observer.observe(frame,processor.is_scrolling(),now),now);
     }
     None
 }

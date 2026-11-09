@@ -413,8 +413,8 @@ class App(Adw.Application):
 
     def statusbar_controls(self,page):
         from . import statusbar
-        card=self.card(page,'图标')
-        self.actions(card,[('显示图标',lambda:self.execute(['/usr/bin/pou','tray'])),
+        icon_card=self.card(page,'图标')
+        self.actions(icon_card,[('显示图标',lambda:self.execute(['/usr/bin/pou','tray'])),
                            ('隐藏图标',lambda:self.execute(['/usr/bin/pou','hide-tray']))])
         card=self.card(page,'常驻信息')
         count=label('', 'pou-note');card.append(count)
@@ -422,6 +422,12 @@ class App(Adw.Application):
                          max_children_per_line=2,min_children_per_line=1,column_spacing=18,row_spacing=12)
         card.append(grid)
         selected=statusbar.load();buttons={};changing=False
+        icon=Gtk.CheckButton(label='触控板动态图标',active=statusbar.icon_enabled())
+        def toggle_icon(button):
+            try:statusbar.save(selected,touchpad_icon=button.get_active())
+            except (OSError,ValueError) as exc:self.message.set_label(str(exc))
+        icon.connect('toggled',toggle_icon)
+        icon_card.append(icon)
         def update_choices():
             count.set_label(f'已选 {len(selected)} / {statusbar.MAX_ITEMS}')
             for key,button in buttons.items():

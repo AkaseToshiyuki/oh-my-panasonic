@@ -10,9 +10,10 @@ function read(file, cancel) {
 }
 
 export class CompactStatus {
-    constructor(label) {
+    constructor(label, onSettings=()=>{}, onDraw=()=>{}) {
         this.label = label; this.alive = true; this.visible = true;
         this.items = ['battery']; this.battery = {}; this.metrics = {};
+        this.onSettings=onSettings;this.onDraw=onDraw;
         this.configCancel = new Gio.Cancellable();
         const directory = GLib.build_filenamev([GLib.get_user_config_dir(),'panasonic-on-ubuntu']);
         this.file = Gio.File.new_for_path(GLib.build_filenamev([directory,'statusbar.json']));
@@ -31,8 +32,10 @@ export class CompactStatus {
     async reload() {
         const generation = this.configGeneration = (this.configGeneration??0)+1;
         let items = ['battery'];
-        try { items=selection(JSON.parse(await read(this.file,this.configCancel))?.items); } catch (_) { /* Missing settings use the default. */ }
+        let settings={};
+        try { settings=JSON.parse(await read(this.file,this.configCancel))??{}; items=selection(settings.items); } catch (_) { /* Missing settings use the default. */ }
         if (!this.alive || generation !== this.configGeneration) return;
+        this.onSettings(settings.touchpad_icon!==false);
         if (JSON.stringify(items) !== JSON.stringify(this.items)) { this.items=items; this.restart(); }
         else this.draw();
     }
@@ -43,11 +46,18 @@ export class CompactStatus {
     setVisible(visible) { if (visible !== this.visible) { this.visible=visible; this.restart(); } }
     restart() {
         if (this.timer) GLib.Source.remove(this.timer);
-        this.timer=0; this.cancel?.cancel(); this.cancel=null; this.previous=null; this.metrics={};
+        if (this.warmupTimer) GLib.Source.remove(this.warmupTimer);
+        this.timer=this.warmupTimer=0; this.cancel?.cancel(); this.cancel=null; this.metrics={};
+        if (!this.visible || !this.items.includes('cpu')) this.previous=null;
         this.draw();
         if (!this.alive || !this.visible || !this.items.some(k=>POLLED.includes(k))) return;
         const cancel = this.cancel = new Gio.Cancellable();
         this.sample(cancel);
+        if (this.items.includes('cpu') && !this.previous)
+            this.warmupTimer=GLib.timeout_add(GLib.PRIORITY_DEFAULT,250,()=>{
+                if (this.busy===cancel) return GLib.SOURCE_CONTINUE;
+                this.warmupTimer=0;this.sample(cancel);return GLib.SOURCE_REMOVE;
+            });
         this.timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT,5,()=>{
             this.sample(cancel); return GLib.SOURCE_CONTINUE;
         });
@@ -61,7 +71,7 @@ export class CompactStatus {
         const [cpu,memory,power] = await Promise.all([
             this.items.includes('cpu') ? load('/proc/stat') : null,
             this.items.includes('memory') ? load('/proc/meminfo') : null,
-            this.items.some(k=>['cpu_power','platform_power','temperature'].includes(k)) ? load('/run/panasonic-on-ubuntu/power.json') : null,
+            this.items.some(k=>['cpu_power','platform_power','temperature','remaining'].includes(k)) ? load('/run/panasonic-on-ubuntu/power.json') : null,
         ]);
         if (!this.alive || cancel !== this.cancel || cancel.is_cancelled()) return;
         if (cpu) { previous=cpuSample(cpu); values.cpu=cpuPercent(this.previous,previous); }
@@ -74,12 +84,14 @@ export class CompactStatus {
         const text=render(this.items,{...this.metrics,...this.battery});
         if (this.label.text !== text) this.label.text=text;
         this.label.visible=Boolean(text);
+        this.onDraw();
     }
     destroy() {
         this.alive=false;
         if (this.timer) GLib.Source.remove(this.timer);
         if (this.reloadTimer) GLib.Source.remove(this.reloadTimer);
-        this.timer=this.reloadTimer=0;
+        if (this.warmupTimer) GLib.Source.remove(this.warmupTimer);
+        this.timer=this.reloadTimer=this.warmupTimer=0;
         this.cancel?.cancel(); this.configCancel.cancel(); this.monitor?.cancel();
     }
 }

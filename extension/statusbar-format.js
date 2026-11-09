@@ -1,5 +1,5 @@
 export const KEYS = ['battery','cpu','remaining','battery_power','cpu_power','platform_power','temperature','memory'];
-export const POLLED = ['cpu','cpu_power','platform_power','temperature','memory'];
+export const POLLED = ['cpu','cpu_power','platform_power','temperature','memory','remaining'];
 export function selection(items) {
     return Array.isArray(items) ? [...new Set(items.filter(k => KEYS.includes(k)))].slice(0,5) : ['battery'];
 }
@@ -34,20 +34,22 @@ export function batteryValues(get) {
     let seconds = state === 2 ? get('TimeToEmpty') : null;
     if (state === 2 && !(seconds > 0) && get('Energy') > 0 && rate > 0)
         seconds = 3600*get('Energy')/rate;
-    return {battery:get('Percentage'), remaining:seconds,
+    return {battery:get('Percentage'), remaining:seconds, energy:get('Energy'), discharging:state===2,
         battery_power:state === 1 || state === 2 ? rate : null, charging:state === 1};
 }
 export function render(items, data) {
     const parts = [];
     for (const key of selection(items)) {
-        const n = data[key];
+        let n = data[key];
+        if (key==='remaining' && !(n>0) && finite(data.energy) && data.energy>0 && finite(data.platform_power) && data.platform_power>0)
+            n=3600*data.energy/data.platform_power;
         if (!finite(n) || n < 0) continue;
         if (['battery','cpu','memory'].includes(key)) {
-            if (n <= 100) parts.push(`${{battery:'',cpu:'CPU ',memory:'内存 '}[key]}${Math.round(n)}%`);
+            if (n <= 100) parts.push(`${{battery:'',cpu:'CPU ',memory:'内存 '}[key]}${key==='cpu' ? n.toFixed(1) : Math.round(n)}%`);
         } else if (key === 'remaining') {
             if (n <= 0 || n >= 7*86400) continue;
             const minutes = Math.max(1,Math.ceil(n/60));
-            parts.push(`剩余 ${Math.floor(minutes/60) ? `${Math.floor(minutes/60)}h` : ''}${minutes%60 ? `${minutes%60}m` : ''}`);
+            parts.push(`${data.discharging ? '剩余' : '约'} ${Math.floor(minutes/60) ? `${Math.floor(minutes/60)}h` : ''}${minutes%60 ? `${minutes%60}m` : ''}`);
         } else if (key === 'temperature') {
             if (n <= 150) parts.push(`${Math.round(n)}°C`);
         } else if (n <= 1000) {

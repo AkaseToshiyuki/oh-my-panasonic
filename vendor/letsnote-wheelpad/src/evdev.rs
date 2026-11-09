@@ -144,6 +144,20 @@ impl ContactSnapshot {
         self.slots.iter().filter(|slot| slot.tracking_id != INACTIVE_TRACKING_ID).count()
     }
 
+    pub fn positions(&self) -> impl Iterator<Item = TouchSample> + '_ {
+        self.positioned_contacts().map(|(_,position)|position)
+    }
+
+    pub fn positioned_contacts(&self) -> impl Iterator<Item = (i32, TouchSample)> + '_ {
+        self.slots.iter().filter(|slot| self.contact && slot.tracking_id != INACTIVE_TRACKING_ID)
+            .map(|slot| (slot.tracking_id, TouchSample { x: slot.x, y: slot.y }))
+    }
+
+    pub fn button_down(&self, button: Key) -> bool {
+        TOUCHPAD_BUTTONS.iter().position(|key| *key == button)
+            .is_some_and(|index| self.pressed_buttons & (1 << index) != 0)
+    }
+
     pub fn selected_slot(&self) -> Option<usize> {
         self.current_slot
     }
