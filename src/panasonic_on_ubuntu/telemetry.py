@@ -26,7 +26,31 @@ def command(argv):
 
 
 def network():
-    client = NM.Client.new(None)
+    # libnm's synchronous constructor owns a private context. Finish its
+    # cancelled D-Bus work before dropping that context in a resident reader.
+    context = GLib.MainContext.new()
+    context.push_thread_default()
+    try:
+        client = NM.Client.new(None)
+        try:
+            return network_snapshot(client)
+        finally:
+            finished = []
+            def shutdown_complete(_, result):
+                try:
+                    NM.Client.wait_shutdown_finish(result)
+                    finished.append(None)
+                except GLib.Error as exc:
+                    finished.append(exc)
+            client.wait_shutdown(True, None, shutdown_complete)
+            client = None
+            while not finished:context.iteration(True)
+            if finished[0] is not None:raise finished[0]
+    finally:
+        context.pop_thread_default()
+
+
+def network_snapshot(client):
     result = {'enabled': client.wireless_get_enabled(), 'hardware': client.wireless_hardware_get_enabled(), 'available': False, 'connected': False, 'nearby': []}
     devices = [d for d in client.get_devices() if isinstance(d, NM.DeviceWifi)]
     if not devices:
@@ -99,36 +123,57 @@ def system():
                 temperatures.append(int((zone / 'temp').read_text()) / 1000)
         except (OSError, ValueError):
             pass
-    return {'cpu_total': sum(cpu), 'cpu_idle': cpu[3] + cpu[4], 'memory_total_gb': round(mem['MemTotal']/1048576, 1), 'memory_percent': round((1-mem['MemAvailable']/mem['MemTotal'])*100), 'temperature': max(temperatures) if temperatures else None, 'profile': current_or_none(), 'pad_active': command(['systemctl', 'show', 'pou-wheelpad.service', '-p', 'ActiveState', '--value']) == 'active'}
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        reply = bus.call_sync('org.freedesktop.systemd1', '/org/freedesktop/systemd1/unit/pou_2dwheelpad_2eservice',
+                              'org.freedesktop.DBus.Properties', 'Get',
+                              GLib.Variant('(ss)', ('org.freedesktop.systemd1.Unit', 'ActiveState')),
+                              None, Gio.DBusCallFlags.NO_AUTO_START, 1500, None)
+        pad_active = reply.unpack()[0] == 'active'
+    except GLib.Error:
+        pad_active = False
+    return {'cpu_total': sum(cpu), 'cpu_idle': cpu[3] + cpu[4], 'memory_total_gb': round(mem['MemTotal']/1048576, 1), 'memory_percent': round((1-mem['MemAvailable']/mem['MemTotal'])*100), 'temperature': max(temperatures) if temperatures else None, 'profile': current_or_none(), 'pad_active': pad_active}
 
 
-def collect():
-    data = {'timestamp': time.time(), 'battery': snapshot(), 'firmware': firmware_status(), 'power': power_status(), 'optical': optical_status(), 'peripherals':peripheral_status(), 'errors': {}}
-    from .optical_info import collect as optical_details
-    try:data['optical']['details']=optical_details(data['optical'])
-    except (OSError,ValueError,TypeError):data['optical']['details']={}
-    from .ssd_power import status as ssd_status
-    data['ssd_power'] = ssd_status()
-    from .care import status as care_status
-    data['care'] = care_status()
-    from .power_summary import describe
-    samples = history()
-    data['power_summary'] = describe(data['battery'], data['care'], samples)
-    from .face import status as face_status
-    data['face'] = face_status()
+def optical():
+    from .optical_info import collect as details
+    value = optical_status()
+    try:value['details'] = details(value)
+    except (OSError, ValueError, TypeError):value['details'] = {}
+    return value
+
+
+def hardware():
     disk=shutil.disk_usage('/')
-    data['hardware']={'model':Path('/sys/class/dmi/id/product_name').read_text().strip(),'kernel':os.uname().release,'root_total_gb':round(disk.total/1e9,1),'root_used_gb':round(disk.used/1e9,1)}
-    for name, function in [('network', network), ('bluetooth', bluetooth), ('audio', audio), ('system', system)]:
-        try:
-            data[name] = function()
-        except Exception as exc:
-            data[name] = {}
-            data['errors'][name] = str(exc)[:200]
+    return {'model':Path('/sys/class/dmi/id/product_name').read_text().strip(),'kernel':os.uname().release,'root_total_gb':round(disk.total/1e9,1),'root_used_gb':round(disk.used/1e9,1)}
+
+
+def brightness():
     try:
         _, monitor = backlight()
-        data['brightness'] = round((monitor['value']-monitor['min'])*100/(monitor['max']-monitor['min']))
+        return round((monitor['value']-monitor['min'])*100/(monitor['max']-monitor['min']))
     except Exception:
-        data['brightness'] = None
+        return None
+
+
+SCOPES = {
+    'home': ('battery', 'care', 'power', 'firmware', 'network', 'bluetooth', 'audio', 'system', 'brightness'),
+    'overview': ('battery', 'power', 'network', 'system', 'hardware'),
+    'battery': ('battery', 'care'),
+    'cpu': ('power', 'peripherals'),
+    'power': ('power', 'system', 'firmware', 'peripherals', 'ssd_power', 'optical'),
+    'fan': ('power', 'firmware'),
+    'network': ('network', 'peripherals'),
+    'bluetooth': ('bluetooth',),
+    'audio': ('audio',),
+    'display': ('brightness',),
+    'touchpad': ('system',),
+    'storage': ('hardware', 'peripherals', 'ssd_power'),
+    'face': ('face',),
+}
+
+
+def history_points(data, samples):
     points = []
     charge_points = []
     for sample in samples:
@@ -147,4 +192,64 @@ def collect():
     if points and data['battery_history'][-1] != points[-1]:
         data['battery_history'].append(points[-1])
     data['charge_power_history'] = charge_points
-    return data
+
+
+class Collector:
+    """Collect only visible sections; retain history in the panel between refreshes."""
+    def __init__(self):
+        self.samples = None
+        self.history_at = 0
+
+    def collect(self, scope='all'):
+        if scope != 'all' and scope not in SCOPES:
+            raise ValueError('Unknown telemetry scope')
+        from .ssd_power import status as ssd_status
+        from .care import status as care_status
+        from .face import status as face_status
+        functions = dict(battery=snapshot, firmware=firmware_status, power=power_status,
+                         optical=optical, peripherals=peripheral_status, ssd_power=ssd_status,
+                         care=care_status, face=face_status, hardware=hardware, network=network,
+                         bluetooth=bluetooth, audio=audio, system=system, brightness=brightness)
+        data = {'timestamp': time.time(), 'errors': {}, 'scope': scope}
+        for name in functions if scope == 'all' else SCOPES[scope]:
+            try:
+                if name == 'firmware' and scope != 'all':
+                    data[name] = firmware_status(names=('fan_profile', 'power_limits_enabled'))
+                else:
+                    data[name] = functions[name]()
+            except Exception as exc:
+                data[name] = None if name == 'brightness' else {}
+                data['errors'][name] = str(exc)[:200]
+        if scope in ('all', 'home', 'battery'):
+            from .power_summary import describe
+            now = time.monotonic()
+            try:
+                if self.samples is None or not 0 <= now-self.history_at < 30:
+                    self.samples = history()
+                    self.history_at = now
+                samples = self.samples
+            except Exception as exc:
+                samples = []
+                data['errors']['history'] = str(exc)[:200]
+            data['power_summary'] = describe(data['battery'], data['care'], samples)
+            if scope != 'home':history_points(data, samples)
+        return data
+
+
+_collector = Collector()
+
+
+def collect(scope='all'):
+    return _collector.collect(scope)
+
+
+def stream():
+    """One unprivileged reader while a menu is open; EOF ends the process."""
+    import sys
+    while True:
+        line = sys.stdin.readline(80)
+        if not line:return
+        scope = line.strip()
+        if not line.endswith('\n') or scope not in SCOPES:
+            raise ValueError('Invalid telemetry request')
+        print(json.dumps(collect(scope), ensure_ascii=False), flush=True)

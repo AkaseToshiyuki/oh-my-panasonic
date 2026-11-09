@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from . import power_profiles
+from .diagnostics import StateLog
 
 CONFIG = Path('/etc/panasonic-on-ubuntu/power.json')
 RUNTIME = Path('/run/panasonic-on-ubuntu')
@@ -401,7 +402,7 @@ def run():
     previous_config = None
     retry_at = None
     request_id = None
-    last_recorded = 0
+    records = StateLog()
     wall_offset=time.time()-time.monotonic()
     # Optical lifecycle is managed by its independent system service.
     notify('READY=1')
@@ -498,11 +499,12 @@ def run():
                 ssd.tick(controller.mode)
             except (OSError, ValueError, RuntimeError) as exc:
                 log.warning('SSD power policy: %s', exc)
-            if time.monotonic()-last_recorded>=10:
-                last_recorded=time.monotonic()
+            fan_state = state.get('fan', {})
+            record_key = (state['mode'], state['error'], state['request_id'], state['ec_lease'],
+                          state['lease_reason'], fan_state.get('mode'), fan_state.get('error'))
+            if records.due(record_key, time.monotonic()):
                 log.info('%s',json.dumps({k:v for k,v in state.items() if k!='history'},ensure_ascii=False))
                 handler.flush()
-                os.fsync(handler.stream.fileno())
             notify('WATCHDOG=1')
     finally:
         if pd_stop is not None:

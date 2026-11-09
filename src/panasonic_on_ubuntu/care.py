@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import socket
 import time
+from .diagnostics import StateLog
 
 CONFIG = Path('/etc/panasonic-on-ubuntu/battery-care.json')
 STATE = Path('/var/lib/panasonic-on-ubuntu/battery-care.json')
@@ -280,7 +281,8 @@ def run():
         wake.set()
     signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGHUP, lambda *_: wake.set())
-    previous_state=None; last_record=0; mismatch_since=None
+    previous_state=None; mismatch_since=None
+    records = StateLog()
     restore()
     if (FIRMWARE/'arm_transition').exists():
         (FIRMWARE/'arm_transition').write_text('0')
@@ -347,8 +349,10 @@ def run():
             if serialized!=previous_state:
                 atomic(STATE,policy.state); previous_state=serialized
             atomic(RUNTIME,output,0o644)
-            if now-last_record>=30:
-                log.info('%s',json.dumps(output,ensure_ascii=False)); last_record=now
+            record_key = (output['phase'], error, output['request_id'], driver,
+                          config['mode'], config['limit'], data.get('ac'), data.get('usb_online'))
+            if records.due(record_key, time.monotonic()):
+                log.info('%s',json.dumps(output,ensure_ascii=False))
             notify('WATCHDOG=1')
             if not stopping:
                 wake.wait(5)

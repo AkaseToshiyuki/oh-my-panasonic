@@ -96,27 +96,108 @@ export default class Panasonic extends Extension {
     enableControls() {
         this.displaySettings = new Gio.Settings({schema_id:'org.gnome.settings-daemon.plugins.power'});
         this.alive = true; this.hidden = false; this.data = {}; this.previous = null; this.updaters = [];
+        this.loading = false; this.refreshPending = false; this.timer = 0;
         this.cpuPoints = []; this.rxPoints = []; this.txPoints = []; this.sources = new Set(); this.processes = new Set();
         this.button = new PanelMenu.Button(0, 'Oh My Panasonic');
         const top = box(false, 'pou-panel-box');
         top.add_child(new St.Icon({gicon: Gio.icon_new_for_string(`${this.path}/pou-symbolic.svg`), style_class: 'system-status-icon'}));
-        this.percent = label('…'); top.add_child(this.percent); this.button.add_child(top);
+        this.percent = label(''); top.add_child(this.percent); this.button.add_child(top);
         Main.panel.addToStatusArea(this.uuid, this.button);
         if (GLib.file_test(GLib.build_filenamev([GLib.get_user_config_dir(),'panasonic-on-ubuntu','indicator-hidden']),GLib.FileTest.EXISTS))
             this.hide();
         const root = new PopupMenu.PopupBaseMenuItem({reactive: true, activate: false, hover: false, can_focus: false});
         this.scroll = new St.ScrollView({style_class: 'pou-scroll', overlay_scrollbars: true, x_expand: true});
         this.body = box(true, 'pou-body'); this.scroll.set_child(this.body); root.add_child(this.scroll); this.button.menu.addMenuItem(root);
-        this.button.menu.connect('open-state-changed', (_, open) => { if (open) this.refresh(); });
+        this.button.menu.connect('open-state-changed', (_, open) => {
+            if (this.timer) GLib.Source.remove(this.timer);
+            this.timer = 0;
+            if (open) {
+                this.refresh();
+                this.timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+                    this.refresh(); return GLib.SOURCE_CONTINUE;
+                });
+            } else this.stopTelemetry();
+        });
         this.dbus = Gio.DBusExportedObject.wrapJSObject(XML, {Show: () => this.show(), Hide: () => this.hide(), Open: page => {this.show(); this.page(page); this.button.menu.open();}, SetBrightness: p => this.setScreenPercent(p), GetBrightness: () => this.screenPercent() ?? -1, Inspect: () => JSON.stringify({ready: !!this.data.timestamp, page: this.route, visible: !this.hidden, errors: this.data.errors ?? {}, sections: ['battery','network','bluetooth','audio','power','touchpad','display']})});
         this.dbus.export(Gio.DBus.session, '/io/github/panasonic_on_ubuntu/Panel');
         this.owner = Gio.bus_own_name_on_connection(Gio.DBus.session, BUS, Gio.BusNameOwnerFlags.NONE, null, null);
-        this.page('home'); this.refresh();
-        this.timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => { if (!this.hidden && (this.button.menu.isOpen || ++this.ticks % 6 === 0)) this.refresh(); return GLib.SOURCE_CONTINUE; });
-        this.ticks = 0;
+        this.page('home'); this.watchBattery();
     }
-    show() { this.hidden = false; this.button.show(); this.refresh(); }
+    watchBattery() {
+        const cancelled = new Gio.Cancellable();
+        this.batteryCancel = cancelled;
+        Gio.DBusProxy.new_for_bus(Gio.BusType.SYSTEM, Gio.DBusProxyFlags.DO_NOT_AUTO_START, null,
+            'org.freedesktop.UPower', '/org/freedesktop/UPower/devices/DisplayDevice',
+            'org.freedesktop.UPower.Device', cancelled, (_, result) => {
+                if (!this.alive || cancelled.is_cancelled()) return;
+                try {
+                    this.batteryProxy = Gio.DBusProxy.new_for_bus_finish(result);
+                    const update = () => {
+                        const present = this.batteryProxy.get_cached_property('IsPresent')?.unpack();
+                        const value = this.batteryProxy.get_cached_property('Percentage')?.unpack();
+                        this.percent.text = this.batteryProxy.g_name_owner && present && Number.isFinite(value)
+                            ? `${Math.round(value)}%` : '';
+                    };
+                    this.batteryChanged = this.batteryProxy.connect('g-properties-changed', update);
+                    this.batteryOwner = this.batteryProxy.connect('notify::g-name-owner', update);
+                    update();
+                } catch (e) { if (!cancelled.is_cancelled()) console.error(e); }
+            });
+    }
+    show() { this.hidden = false; this.button.show(); }
     hide() { this.hidden = true; this.button.menu.close(); this.button.hide(); }
+    stopTelemetry() {
+        const worker = this.telemetryWorker;
+        this.telemetryWorker = null;
+        if (!worker) return;
+        worker.cancel.cancel();
+        worker.process.force_exit();
+        this.processes.delete(worker.process);
+        if (!worker.busy) this.closeTelemetryPipes(worker);
+    }
+    closeTelemetryPipes(worker) {
+        for (const stream of [worker.input, worker.output]) {
+            try { stream.close(null); } catch (_) { /* Cancellation already released the reader. */ }
+        }
+    }
+    async collectTelemetry(scope) {
+        if (!this.telemetryWorker) {
+            const process = Gio.Subprocess.new(['/usr/bin/pou','telemetry-stream'],
+                Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+            this.processes.add(process);
+            this.telemetryWorker = {process, cancel:new Gio.Cancellable(),
+                input:process.get_stdin_pipe(), output:new Gio.DataInputStream({base_stream:process.get_stdout_pipe()})};
+        }
+        const worker = this.telemetryWorker;
+        worker.busy = true;
+        const timeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 20, () => {
+            this.sources.delete(timeout);
+            if (this.telemetryWorker === worker) this.stopTelemetry();
+            return GLib.SOURCE_REMOVE;
+        });
+        this.sources.add(timeout);
+        try {
+            await new Promise((resolve,reject) => worker.input.write_all_async(new TextEncoder().encode(scope+'\n'),
+                GLib.PRIORITY_DEFAULT, worker.cancel, (stream,result) => {
+                    try { stream.write_all_finish(result);resolve(); } catch(e) { reject(e); }
+                }));
+            return await new Promise((resolve,reject) => worker.output.read_line_async(GLib.PRIORITY_DEFAULT,
+                worker.cancel,(stream,result) => {
+                    try {
+                        const [line] = stream.read_line_finish_utf8(result);
+                        if (line === null) throw new Error('状态采集连接已关闭');
+                        resolve(line);
+                    } catch(e) { reject(e); }
+                }));
+        } catch(e) {
+            if (this.telemetryWorker === worker) this.stopTelemetry();
+            throw e;
+        } finally {
+            worker.busy = false;
+            if (this.telemetryWorker !== worker) this.closeTelemetryPipes(worker);
+            if (this.sources.delete(timeout)) GLib.Source.remove(timeout);
+        }
+    }
     async run(argv) {
         const process = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
         this.processes.add(process);
@@ -131,16 +212,20 @@ export default class Panasonic extends Extension {
         });
     }
     async refresh() {
-        if (!this.alive || this.loading) return;
+        if (!this.alive || !this.button.menu.isOpen) return;
+        if (this.loading) { this.refreshPending = true; return; }
         this.loading = true;
+        const scope = this.route;
         try {
-            const data = JSON.parse(await this.run(['/usr/bin/pou','telemetry']));
+            const data = JSON.parse(await this.collectTelemetry(scope));
             if (!this.alive) return;
+            if (!this.button.menu.isOpen) return;
+            if (scope !== this.route) { this.refreshPending = true; return; }
             const old = this.previous;
             if (old && data.timestamp > old.timestamp) {
                 const elapsed = data.timestamp-old.timestamp;
                 const total = (data.system?.cpu_total ?? 0)-(old.system?.cpu_total ?? 0);
-                if (total > 0) this.cpuPoints.push([data.timestamp, Math.max(0,Math.min(100,100*(1-((data.system.cpu_idle-old.system.cpu_idle)/total))))]);
+                if (total > 0 && data.system && old.system) this.cpuPoints.push([data.timestamp, Math.max(0,Math.min(100,100*(1-((data.system.cpu_idle-old.system.cpu_idle)/total))))]);
                 for (const [key, points] of [['rx_bytes',this.rxPoints],['tx_bytes',this.txPoints]]) {
                     const now = data.network?.[key]; const prior = old.network?.[key];
                     if (now != null && prior != null && now >= prior && data.network.interface === old.network.interface) points.push([data.timestamp,(now-prior)/elapsed/1024]);
@@ -150,10 +235,13 @@ export default class Panasonic extends Extension {
             if (data.power?.timestamp != null && data.power.timestamp < this.data.power?.timestamp)
                 data.power = this.data.power;
             this.previous = data; this.data = data;
-            this.percent.text = fmt(this.value('capacity'),'%');
+            if (data.battery) this.percent.text = fmt(this.value('capacity'),'%');
             this.update();
-        } catch(e) { if (this.alive) this.message(`状态刷新失败：${e.message}`); }
-        finally { this.loading = false; }
+        } catch(e) { if (this.alive && this.button.menu.isOpen) this.message(`状态刷新失败：${e.message}`); }
+        finally {
+            this.loading = false;
+            if (this.refreshPending) { this.refreshPending = false; this.refresh(); }
+        }
     }
     battery() { return this.data.battery?.batteries?.[0]; }
     value(key) { return this.battery()?.fields?.[key]?.value; }
@@ -198,6 +286,7 @@ export default class Panasonic extends Extension {
         }
         const area = createPlot();
         row.add_child(axis); row.add_child(area); this.body.add_child(row);
+        let previousPoints = '';
         this.updaters.push(()=>{
             const valid = p => Array.isArray(p) && p.length >= 2 && p.every(Number.isFinite);
             area.points = getter().filter(valid);
@@ -210,7 +299,8 @@ export default class Panasonic extends Extension {
             const reading = series => series.length ? formatTick(series.at(-1)[1]) + ' ' + unit : '—';
             latest.text = second ? [area.points.length?'下载 '+reading(area.points):'',area.second.length?'上传 '+reading(area.second):''].filter(Boolean).join('　')
                                  : area.points.length ? '最近 ' + reading(area.points) : '';
-            area.queue_repaint();
+            const signature = JSON.stringify([area.points, area.second]);
+            if (signature !== previousPoints) { previousPoints = signature; area.queue_repaint(); }
         });
     }
     meter(getter, parent=this.body) { const area=createPlot(100,true); parent.add_child(area); this.updaters.push(()=>{const value=getter();area.visible=Number.isFinite(value);area.points=area.visible?[[0,value]]:[];area.queue_repaint();}); }
@@ -505,11 +595,17 @@ export default class Panasonic extends Extension {
             this.actionButton('进入面板', () => { this.button.menu.close(); this.launch(['/usr/bin/pou','gui']); }, footer);
         }
         this.update();
+        if (this.button.menu.isOpen) this.refresh();
     }
     launch(argv) { try { Gio.Subprocess.new(argv,Gio.SubprocessFlags.NONE); } catch(e) {this.message(e.message);} }
     disableControls() {
         this.transitionCheck=0;
         this.alive=false;if(this.timer)GLib.Source.remove(this.timer);this.timer=0;
+        this.stopTelemetry();
+        this.batteryCancel?.cancel();this.batteryCancel=null;
+        if(this.batteryChanged)this.batteryProxy?.disconnect(this.batteryChanged);
+        if(this.batteryOwner)this.batteryProxy?.disconnect(this.batteryOwner);
+        this.batteryChanged=this.batteryOwner=0;this.batteryProxy=null;
         for(const source of this.sources??[])GLib.Source.remove(source);this.sources?.clear();
         for(const process of this.processes??[])process.force_exit();this.processes?.clear();
         this.dbus?.unexport();if(this.owner)Gio.bus_unown_name(this.owner);this.owner=0;

@@ -68,6 +68,8 @@ class App(Adw.Application):
     def __init__(self):
         super().__init__(application_id='io.github.panasonic_on_ubuntu',flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.data, self.updaters, self.cards = {}, [], []
+        self.page_updates, self.page_cards = {}, {}
+        self.refresh_pending = False
         self.rx_points, self.tx_points, self.net_previous = [], [], None
         self.scales = {}
         self.updating = self.loading = False
@@ -124,11 +126,21 @@ class App(Adw.Application):
             page=box(True,18)
             for side in ('start','end','top','bottom'):getattr(page,'set_margin_'+side)(26)
             page.append(label(title,'pou-page-title'))
-            scroll.set_child(page);self.stack.add_named(scroll,key);self.build_page(key,page)
-        self.nav.connect('row-selected',lambda _,row:self.stack.set_visible_child_name(self.page_ids[row.get_index()]) if row else None)
+            scroll.set_child(page);self.stack.add_named(scroll,key)
+            start, first_card = len(self.updaters), len(self.cards)
+            self.build_page(key,page)
+            self.page_updates[key] = self.updaters[start:]
+            self.page_cards[key] = self.cards[first_card:]
+        self.nav.connect('row-selected',self.select_page)
         self.nav.select_row(self.nav.get_row_at_index(0))
         self.window.set_content(outer);self.window.present();self.update()
         GLib.timeout_add_seconds(5,self.update)
+
+    def select_page(self, _, row):
+        if row is None:return
+        self.stack.set_visible_child_name(self.page_ids[row.get_index()])
+        self.render_values()
+        if self.window.get_visible():self.refresh_once()
 
     def get(self,*keys):
         value=self.data
@@ -214,11 +226,13 @@ class App(Adw.Application):
         card=self.card(parent,title);area=Chart(maximum,unit);card.append(area)
         reading=label('', 'pou-note');card.append(reading)
         def update():
-            area.points=[p for p in getter() if len(p)==2 and all(isinstance(n,(int,float)) and math.isfinite(n) for n in p)]
+            points=[p for p in getter() if len(p)==2 and all(isinstance(n,(int,float)) and math.isfinite(n) for n in p)]
+            changed = points != area.points
+            area.points = points
             card.set_visible(bool(area.points))
             area.set_visible(len(area.points)>1)
             reading.set_label(f'最近 {area.points[-1][1]:.3g} {unit}' if area.points else '')
-            area.queue_draw()
+            if changed:area.queue_draw()
         self.updaters.append(update)
 
     def live_writer(self):
@@ -598,20 +612,31 @@ class App(Adw.Application):
             except Exception as exc:message=str(exc)
             GLib.idle_add(finished,message,power)
         threading.Thread(target=work,daemon=True).start()
-    def refresh_once(self):self.update();return False
-    def update(self):
+    def refresh_once(self):self.update(force=True);return False
+    def update(self, force=False):
         if not self.get_active_window():return False
-        if self.loading:return True
+        surface = self.window.get_surface()
+        if not force and surface and surface.get_state() & Gdk.ToplevelState.MINIMIZED:return True
+        if self.loading:
+            if force:self.refresh_pending=True
+            return True
         self.loading=True
+        scope = self.stack.get_visible_child_name()
         def work():
             try:
-                result=subprocess.run(['/usr/bin/pou','telemetry'],capture_output=True,text=True,timeout=20,check=True)
-                value=json.loads(result.stdout)
+                from .telemetry import collect
+                value=collect(scope)
                 GLib.idle_add(self.apply,value)
             except Exception as exc:GLib.idle_add(self.failed,str(exc))
         threading.Thread(target=work,daemon=True).start();return True
-    def failed(self,error):self.loading=False;self.message.set_label('状态刷新失败：'+error[:250]);return False
+    def failed(self,error):
+        self.loading=False;self.message.set_label('状态刷新失败：'+error[:250])
+        if self.refresh_pending:
+            self.refresh_pending=False;self.refresh_once()
+        return False
     def apply(self,value):
+        if value.get('scope',self.stack.get_visible_child_name()) not in ('all',self.stack.get_visible_child_name()):
+            self.loading=False;self.refresh_pending=False;self.refresh_once();return False
         network=value.get('network',{})
         current=(value.get('timestamp',0),network.get('interface'),network.get('rx_bytes'),network.get('tx_bytes'))
         previous=self.net_previous
@@ -632,14 +657,18 @@ class App(Adw.Application):
         self.data=value;self.loading=False
         self.render_values()
         if self.message.get_label()=='正在连接系统服务…':self.message.set_label('')
+        if self.refresh_pending:
+            self.refresh_pending=False;self.refresh_once()
         return False
 
     def render_values(self):
         self.updating=True
         try:
-            for card in self.cards:card.set_visible(True)
-            for update in self.updaters:update()
-            for card in self.cards:
+            key=self.stack.get_visible_child_name()
+            cards=self.page_cards.get(key,[])
+            for card in cards:card.set_visible(True)
+            for update in self.page_updates.get(key,[]):update()
+            for card in cards:
                 if not any(c.get_visible() for c in list(self.children(card))[1:]):card.set_visible(False)
         finally:self.updating=False
 

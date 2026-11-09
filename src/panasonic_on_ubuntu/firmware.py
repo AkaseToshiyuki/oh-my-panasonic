@@ -19,9 +19,9 @@ def fan_rpm(hwmon=Path('/sys/class/hwmon')):
     return None
 
 
-def status():
+def status(names=None):
     result = {'fan_rpm': fan_rpm()}
-    for name in ('fan_profile', 'original_fan_profile', 'eco_raw', 'power_limits_enabled', 'optical_power', 'optical_capabilities', 'ec_pl1_raw', 'ec_hot_pl1_raw', 'ec_pl2_raw', 'ec_trip_raw', 'manual_fan_supported_raw', 'manual_fan_value_raw', 'performance_lease', 'performance_lease_version', 'package_temperature_c'):
+    for name in names if names is not None else ('fan_profile', 'original_fan_profile', 'eco_raw', 'power_limits_enabled', 'optical_power', 'optical_capabilities', 'ec_pl1_raw', 'ec_hot_pl1_raw', 'ec_pl2_raw', 'ec_trip_raw', 'manual_fan_supported_raw', 'manual_fan_value_raw', 'performance_lease', 'performance_lease_version', 'package_temperature_c'):
         try:
             result[name] = int((ROOT / name).read_text().strip())
         except (OSError, ValueError):
