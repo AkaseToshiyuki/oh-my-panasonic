@@ -34,9 +34,11 @@ class PowerInputTests(unittest.TestCase):
         data = detect(self.supplies, self.typec)
         self.assertEqual(data['ports'][0]['contract_w'], 45)
         self.assertIsNone(data['ports'][0]['measured_input_w'])
+        self.assertEqual(data['input_label'], '')
         self.assertEqual(data['label'], 'USB-C PD')
         self.contract(extra='POWER_SUPPLY_POWER_NOW=7200000')
         self.assertEqual(detect(self.supplies,self.typec)['ports'][0]['measured_input_w'],7.2)
+        self.assertEqual(detect(self.supplies,self.typec)['input_label'], '7.2 W')
 
     def test_charging_requirement_is_scoped_to_known_sv7_models(self):
         self.contract()

@@ -212,7 +212,9 @@ class Tray:
         self.watts.set_visible(bool(watts))
         self.contract.set_label('PD 协商档位 · '+source.get('contract_label','—'))
         self.pdo_choices.set_label('适配器固定档位 · '+source.get('profiles_label','—'))
-        self.input_power.set_label('接口实测输入功率 · '+source.get('input_label','硬件未提供'))
+        input_power = source.get('input_label', '')
+        self.input_power.set_label('实时输入功率 · '+input_power if input_power else '')
+        self.input_power.set_visible(bool(input_power))
         self.care.set_label(f"{care.get('label','电池服务未运行')} · 上限 {care.get('config',{}).get('limit','—')}%")
         if data['batteries']:
             b = data['batteries'][0]

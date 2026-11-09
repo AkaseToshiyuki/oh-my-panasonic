@@ -109,7 +109,7 @@ def detect(root=Path('/sys/class/power_supply'), typec=Path('/sys/class/typec'),
     mains_online = True if '1' in mains else (False if mains and all(s == '0' for s in mains) else None)
     path_label = '外部电源' if ports else {True:'外部电源', False:'电池', None:'未提供'}.get(mains_online)
     result = {'ports':ports, 'mains_online':mains_online, 'path_label':path_label, 'contract_label':'—',
-              'input_label':'硬件未提供', 'profiles_label':'—'}
+              'input_label':'', 'profiles_label':'—'}
     if len(ports) == 1:
         port = ports[0]
         result['label'] = 'USB-C PD' if port['protocol'] in ('PD', 'PD_PPS') else 'USB-C'
