@@ -71,6 +71,14 @@ class Device:
     def __init__(self, path=None):
         self.path = path or system_controller()
         if not re.fullmatch(r'/dev/nvme\d+', self.path): raise ValueError('Invalid NVMe path')
+        self.information = self.apst = self.identity = None
+        self.next_full = 0
+
+    def identity_stamp(self):
+        node = Path('/sys/class/nvme')/Path(self.path).name
+        info = os.stat(self.path)
+        return (info.st_rdev,info.st_ino,str(node.resolve()),
+                *( (node/name).read_text().strip() for name in ('model','serial','firmware_rev')))
 
     def _command(self, opcode, field, value=0, length=0):
         allowed = ((opcode,field,length) in ((6,1,4096),(10,2,0),(10,12,256)) and value == 0
@@ -100,9 +108,16 @@ class Device:
         finally: os.close(descriptor)
 
     def read(self, wake=False):
-        information = identify(self._command(6,1,length=4096)[1])
+        identity = self.identity_stamp()
+        if wake or identity!=self.identity or self.information is None or time.monotonic()>=self.next_full:
+            self.information = None
+            information = identify(self._command(6,1,length=4096)[1])
+            apst,table = self._command(10,12,length=256)
+            self.information,self.apst,self.identity = information,(apst,table),identity
+            self.next_full = time.monotonic()+60
+        information = dict(self.information)
         value = self.active_value() if wake else self._command(10,2)[0]
-        apst, table = self._command(10,12,length=256)
+        apst, table = self.apst
         if value > 255 or value & 31 not in ((0,1,2) if wake else (0,1,2,3,4)):
             raise RuntimeError('SSD 当前工作档位不可识别')
         information.update(device=self.path, value=value, selected=value & 31,
@@ -158,6 +173,11 @@ class Controller:
         self.next_check = 0
         self.retry = False
         self.external = False
+        self.device = None
+
+    def invalidate(self):
+        self.device = None
+        self.next_check = 0
 
     def tick(self, cpu):
         config = load(CONFIG, {'mode':'follow'})
@@ -166,10 +186,12 @@ class Controller:
         key = (mode,target,config.get('request_id'))
         changed = key != self.previous
         if not changed and time.monotonic() < self.next_check: return
-        self.next_check = time.monotonic()+15
+        self.next_check = time.monotonic()+30
         output = dict(timestamp=time.time(),requested=mode,request_id=config.get('request_id'),available=False,error='')
         try:
-            device = Device()
+            if self.device is None or self.device.path!=system_controller():
+                self.device = Device()
+            device = self.device
             if changed or self.retry:
                 release(device)
                 self.external = False
@@ -196,5 +218,6 @@ class Controller:
         except (OSError, ValueError, RuntimeError) as error:
             output['error'] = str(error)
             self.retry = True
+            self.device = None
         self.previous = key
         save(ROOT/'ssd-power.json', output)

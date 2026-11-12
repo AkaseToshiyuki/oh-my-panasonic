@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the optional CF-SV7 GPU verifier using the pinned source and Intel wheel."""
+"""Build the optional multi-model GPU verifier using pinned source and Intel wheel."""
 import argparse
 import hashlib
 import os
@@ -16,7 +16,7 @@ SOURCE = ROOT/'src/face-gpu'
 REV = '352bbbcb0f8f61cc21e36a1f038442e94fa6e26b'
 WHEEL_SHA = '6b581cf1c3fa759495eb051d1ec5be4b5cb61a4e15265db7b9d56260ea5925d0'
 PKG = 'panasonic-on-ubuntu-face-gpu'
-VERSION = '0.17.4'
+VERSION = '0.18.0'
 RUNTIME = ('libopenvino.so.2540','libopenvino_intel_gpu_plugin.so','libopenvino_onnx_frontend.so.2540',
            'libopenvino_ir_frontend.so.2540','libtbb.so.12','libtbbmalloc.so.2','libtbbbind_2_5.so.3')
 
@@ -93,8 +93,9 @@ Architecture: amd64
 Section: utils
 Priority: optional
 Maintainer: AkaseToshiyuki <51808852+AkaseToshiyuki@users.noreply.github.com>
-Depends: panasonic-on-ubuntu (>= {VERSION}), facelock (= 0.2.0-1~ubuntu26.04.1), intel-opencl-icd-legacy, ocl-icd-libopencl1, libssl3t64, libstdc++6
-Description: Local FP32 face verification on Panasonic CF-SV7 with Intel UHD 620
+Depends: panasonic-on-ubuntu (>= 0.23.4), facelock (= 0.2.0-1~ubuntu26.04.1), ocl-icd-libopencl1, libssl3t64, libstdc++6
+Recommends: intel-opencl-icd | intel-opencl-icd-legacy
+Description: Oh My Panasonic local FP32 face verification with Intel graphics
  Native GPU inference, with machine-local compilation of installed face models.
 """)
         shutil.copyfile(ROOT/'packaging/face-gpu-prerm', meta/'prerm')

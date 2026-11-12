@@ -1,5 +1,6 @@
 """Root power policy and bounded live CPU history. No raw MSR writes."""
 import errno
+from functools import lru_cache
 import json
 import logging
 import math
@@ -14,6 +15,7 @@ import sys
 import time
 from . import power_profiles
 from .diagnostics import StateLog
+from .state_writer import JsonWriter
 
 CONFIG = Path('/etc/panasonic-on-ubuntu/power.json')
 RUNTIME = Path('/run/panasonic-on-ubuntu')
@@ -52,12 +54,13 @@ def read(path, default=None):
         return default
 
 
+@lru_cache(maxsize=16)
+def writer(path, mode):
+    return JsonWriter(path,mode)
+
+
 def atomic(path, value, mode=0o644):
-    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    temp = path.with_suffix('.new')
-    temp.write_text(json.dumps(value, ensure_ascii=False))
-    temp.chmod(mode)
-    temp.replace(path)
+    writer(path,mode).write(value)
 
 
 def status():
@@ -360,6 +363,8 @@ def run():
         log.warning('startup restore deferred: %s', exc)
     from .fan import Controller as FanController
     fan = FanController()
+    available_presets = model_presets()
+    state_writer = JsonWriter(RUNTIME/'power.json',heartbeat=5)
     def base_fan():
         if controller.mode in controller.presets:
             return controller.presets[controller.mode]['fan']
@@ -429,6 +434,8 @@ def run():
             new_offset=time.time()-time.monotonic()
             if abs(new_offset-wall_offset)>5:
                 start_sampler('resume or clock change')
+                fan.temperature_reader.paths.clear()
+                ssd.invalidate()
             wall_offset=new_offset
             sampling_age=time.monotonic()-(measured['received'] if measured else last_start)
             if time.monotonic()-last_start>5 and (process is None or process.poll() is not None or sampling_age>12):
@@ -492,7 +499,7 @@ def run():
             state['kernel_guard_c'] = int(read(Path('/sys/module/pou_firmware/parameters/lease_cutoff_c'),'0')) or None
             state['maximum_w'] = controller.ceiling if controller.mode != 'system' else None
             state['request_id'] = request_id
-            state['presets'] = model_presets() if (FIRMWARE/'fan_profile').exists() else {}
+            state['presets'] = available_presets if (FIRMWARE/'fan_profile').exists() else {}
             state['pl1_w'] = int(read(RAPL / 'constraint_0_power_limit_uw', '0')) / 1e6 or None
             state['pl2_w'] = int(read(RAPL / 'constraint_1_power_limit_uw', '0')) / 1e6 or None
             state['no_turbo'] = read(PSTATE / 'no_turbo')
@@ -509,7 +516,7 @@ def run():
                 except (OSError, ValueError):
                     fan_id = None
                 state['fan'] = {'error': str(exc), 'available': False, 'request_id': fan_id}
-            atomic(RUNTIME / 'power.json', state)
+            state_writer.write(state)
             try:
                 peripherals.tick(controller.mode)
             except Exception as exc:

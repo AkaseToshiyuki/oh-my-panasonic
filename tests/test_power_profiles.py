@@ -42,8 +42,7 @@ class PowerProfilesTests(unittest.TestCase):
                 profiles.get_active()
             self.assertIsNone(profiles.current_or_none())
             from panasonic_on_ubuntu import telemetry
-            with patch.object(telemetry, 'command', return_value='active'):
-                state = telemetry.system()
+            state = telemetry.system()
             self.assertIsNone(state['profile'])
             self.assertGreater(state['cpu_total'], 0)
             self.assertGreater(state['memory_total_gb'], 0)

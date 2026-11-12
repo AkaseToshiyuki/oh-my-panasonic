@@ -2,7 +2,6 @@
 import json
 import os
 from pathlib import Path
-import subprocess
 import time
 import shutil
 import gi
@@ -18,36 +17,9 @@ from .peripherals import status as peripheral_status
 from .power_profiles import current_or_none
 
 
-def command(argv):
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=3, env={**os.environ, 'LC_ALL': 'C'})
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip())
-    return result.stdout.strip()
-
-
 def network():
-    # libnm's synchronous constructor owns a private context. Finish its
-    # cancelled D-Bus work before dropping that context in a resident reader.
-    context = GLib.MainContext.new()
-    context.push_thread_default()
-    try:
-        client = NM.Client.new(None)
-        try:
-            return network_snapshot(client)
-        finally:
-            finished = []
-            def shutdown_complete(_, result):
-                try:
-                    NM.Client.wait_shutdown_finish(result)
-                    finished.append(None)
-                except GLib.Error as exc:
-                    finished.append(exc)
-            client.wait_shutdown(True, None, shutdown_complete)
-            client = None
-            while not finished:context.iteration(True)
-            if finished[0] is not None:raise finished[0]
-    finally:
-        context.pop_thread_default()
+    from .session_metrics import desktop
+    return desktop('network',network_snapshot)
 
 
 def network_snapshot(client):
@@ -86,8 +58,11 @@ def network_snapshot(client):
 
 
 def bluetooth():
-    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-    objects = bus.call_sync('org.bluez', '/', 'org.freedesktop.DBus.ObjectManager', 'GetManagedObjects', None, None, Gio.DBusCallFlags.NONE, 3000, None).unpack()[0]
+    from .session_metrics import desktop, bluez_objects
+    return desktop('bluetooth',lambda manager:bluetooth_snapshot(bluez_objects(manager)))
+
+
+def bluetooth_snapshot(objects):
     adapters = [v['org.bluez.Adapter1'] for v in objects.values() if 'org.bluez.Adapter1' in v]
     result = {'available': bool(adapters), 'enabled': any(a.get('Powered') for a in adapters), 'devices': []}
     for interfaces in objects.values():
@@ -100,17 +75,8 @@ def bluetooth():
 
 
 def audio():
-    info = json.loads(command(['pactl', '-f', 'json', 'info']))
-    result = {'available': True}
-    for kind, default in [('sinks', info['default_sink_name']), ('sources', info['default_source_name'])]:
-        devices = []
-        for item in json.loads(command(['pactl', '-f', 'json', 'list', kind])):
-            if kind == 'sources' and item['name'].endswith('.monitor'):
-                continue
-            values = [v['value'] / 65536 * 100 for v in item.get('volume', {}).values()]
-            devices.append({'id': item['index'], 'name': item.get('description', item['name']), 'default': item['name'] == default, 'mute': item['mute'], 'volume': round(sum(values)/len(values)) if values else None, 'state': item.get('state', 'UNKNOWN')})
-        result[kind] = devices
-    return result
+    from .session_metrics import audio as read_audio
+    return read_audio()
 
 
 def system():

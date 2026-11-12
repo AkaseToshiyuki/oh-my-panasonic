@@ -3,6 +3,7 @@ import hashlib
 import lzma
 from pathlib import Path
 import struct
+import time
 
 VAULT = Path('/sys/devices/platform/INTC1041:00/data_vault')
 THERMAL = Path('/sys/class/thermal')
@@ -126,18 +127,44 @@ def load():
         return None
 
 
+class TemperatureReader:
+    def __init__(self):
+        self.paths = {}
+        self.refresh_at = 0
+
+    def discover(self, names):
+        paths = {}
+        for zone in THERMAL.glob('thermal_zone*'):
+            name = (zone / 'type').read_text().strip()
+            if name in names:
+                if name in paths:raise ValueError('Duplicate platform temperature')
+                info = zone.stat()
+                paths[name] = (zone,(info.st_dev,info.st_ino))
+        if set(paths) != set(names):raise ValueError('Platform temperature unavailable')
+        self.paths = paths
+        self.refresh_at = time.monotonic()+60
+
+    def read(self, names):
+        try:
+            if set(self.paths)!=set(names) or time.monotonic()>=self.refresh_at:
+                self.discover(names)
+            result = {}
+            for name,(zone,identity) in self.paths.items():
+                info = zone.stat()
+                if (info.st_dev,info.st_ino)!=identity:
+                    self.discover(names)
+                    return self.read(names)
+                value = int((zone/'temp').read_text())/1000
+                if not 0 < value < 110:raise ValueError('Invalid platform temperature')
+                result[name] = value
+            return result
+        except (OSError,ValueError):
+            self.paths.clear()
+            raise
+
+
 def temperatures(names):
-    result = {}
-    for zone in THERMAL.glob('thermal_zone*'):
-        name = (zone / 'type').read_text().strip()
-        if name in names:
-            value = int((zone / 'temp').read_text()) / 1000
-            if not 0 < value < 110 or name in result:
-                raise ValueError('Invalid platform temperature')
-            result[name] = value
-    if set(result) != set(names):
-        raise ValueError('Platform temperature unavailable')
-    return result
+    return TemperatureReader().read(names)
 
 
 def interpolate(temp, points, minimum=20):

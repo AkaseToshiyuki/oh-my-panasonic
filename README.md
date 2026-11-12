@@ -2,7 +2,7 @@
 
 Panasonic Let's Note 的 Ubuntu 控制中心，提供电池保养、圆形触控板、电源策略、硬件监控和 GNOME 常驻菜单。
 
-**0.23.2 · 测试版 · Ubuntu 26.04 amd64 / GNOME 50**
+**0.23.4 · 测试版 · Ubuntu 26.04 amd64 / GNOME 50**
 
 支持 **CF-SV7 / CFSV7-3L、BIOS V3.11L22** 与 **CF-SR3 / CFSR3-1、BIOS V1.00L12**。不同机型的功能范围见硬件兼容性。其他机型可使用系统提供的通用控制；机型专用硬件功能仅在匹配的设备上启用。本项目由社区独立开发，与 Panasonic 官方无隶属关系。
 
@@ -20,7 +20,7 @@ Panasonic Let's Note 的 Ubuntu 控制中心，提供电池保养、圆形触控
 下载同一版本的主包和兼容包，在下载目录运行：
 
 ```sh
-sudo apt install ./oh-my-panasonic_0.23.2_amd64.deb ./panasonic-on-ubuntu_0.23.2_all.deb
+sudo apt install ./oh-my-panasonic_0.23.4_amd64.deb ./panasonic-on-ubuntu_0.23.4_all.deb
 pou gui
 ```
 

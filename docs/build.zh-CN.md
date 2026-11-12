@@ -23,8 +23,8 @@ Facelock 固定于提交 `352bbbcb0f8f61cc21e36a1f038442e94fa6e26b`，构建器�
 
 | 文件 | 用途 |
 | --- | --- |
-| `oh-my-panasonic_0.23.2_amd64.deb` | 所有机型共用的主程序与硬件模块源码 |
-| `panasonic-on-ubuntu_0.23.2_all.deb` | 保留旧包升级和可选组件依赖的空兼容包 |
+| `oh-my-panasonic_0.23.4_amd64.deb` | 所有机型共用的主程序与硬件模块源码 |
+| `panasonic-on-ubuntu_0.23.4_all.deb` | 保留旧包升级和可选组件依赖的空兼容包 |
 
 主包不包含 Panasonic 专有固件。安装器根据 DMI 型号、SKU 和 BIOS 自动选择模块；SV7 后端内部版本为 0.8.1，SR3 后端为 0.2.1，两者共享电池模块源码。只有匹配的后端注册到 DKMS 并自动加载，内核升级时由 DKMS 重建。安装需匹配当前内核的头文件，Secure Boot 环境还需要模块签名。
 
@@ -32,7 +32,7 @@ Facelock 固定于提交 `352bbbcb0f8f61cc21e36a1f038442e94fa6e26b`，构建器�
 
 主程序可在未安装 Facelock 时使用其余功能。要启用人脸功能，需要另外安装与上述固定提交兼容的 Facelock 0.2.0，并根据其文档配置红外摄像头、TPM 和合法获得的模型。不要将个人录入数据纳入软件包。
 
-`tools/build_face_gpu_deb.py --help` 提供 UHD 620 加速组件的构建入口。需要固定 Facelock 提交、OpenVINO 2025.4.0 Linux x86_64 wheel、OpenSSL 开发头文件和兼容的 Intel OpenCL 驱动。构建脚本校验 wheel 的 SHA-256：
+`tools/build_face_gpu_deb.py --help` 提供共用核显组件的构建入口。UHD 620 使用 Intel legacy OpenCL 驱动，Iris Xe 使用当前 Intel OpenCL 驱动；按已识别的机型及 GPU 自动选择。需要固定 Facelock 提交、OpenVINO 2025.4.0 Linux x86_64 wheel、OpenSSL 开发头文件和对应驱动。构建脚本校验 wheel 的 SHA-256：
 
 `6b581cf1c3fa759495eb051d1ec5be4b5cb61a4e15265db7b9d56260ea5925d0`
 
@@ -52,7 +52,7 @@ PYTHONPATH=src GSK_RENDERER=cairo GDK_BACKEND=x11 OMP_PRIVATE_BUS_TEST=1 xvfb-ru
 安装后可逐文件比较发布包：
 
 ```sh
-python3 tools/verify_installed.py dist/oh-my-panasonic_0.23.2_amd64.deb
+python3 tools/verify_installed.py dist/oh-my-panasonic_0.23.4_amd64.deb
 ```
 
 ## 发布

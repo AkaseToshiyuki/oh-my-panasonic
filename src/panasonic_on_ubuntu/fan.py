@@ -78,6 +78,8 @@ class Controller:
         self.profile_owned = False
         self.oem = fan_tables.load()
         self.sensor_filtered = {}
+        self.temperature_reader = fan_tables.TemperatureReader()
+        self.plot_key = self.plot_value = None
 
     def release(self):
         if self.engaged:
@@ -112,7 +114,11 @@ class Controller:
         except OSError:
             software_quiet = False
         oem = self.oem if software_quiet else None
-        state['plot'] = plot(config, base_profile, oem, software_quiet)
+        plot_key = (config['mode'],config['percent'],tuple(config['curve']),base_profile,software_quiet)
+        if plot_key != self.plot_key:
+            self.plot_value = plot(config,base_profile,oem,software_quiet)
+            self.plot_key = plot_key
+        state['plot'] = self.plot_value
         preset = {'standard': 'normal', 'quiet': 'slow', 'performance': 'fast'}.get(resolved)
         oem_active = bool(oem and preset)
         quiet_curve = software_quiet and (mode == 'quiet' or mode == 'follow' and base_profile == 1)
@@ -137,7 +143,7 @@ class Controller:
         curve = QUIET if quiet_curve else PERFORMANCE if mode == 'performance' else config['curve']
         level = config['percent'] if mode == 'manual' else interpolate(self.filtered, curve)
         if oem_active:
-            sensors = fan_tables.temperatures(oem[preset])
+            sensors = self.temperature_reader.read(oem[preset])
             state['temperatures'] = sensors
             state['policy_source'] = 'platform-acpr'
             level = interpolate(self.filtered, PERFORMANCE) if resolved == 'performance' else fan_tables.interpolate(self.filtered, CPU_GUARD)

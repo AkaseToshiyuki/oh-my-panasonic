@@ -6,22 +6,6 @@ from panasonic_on_ubuntu import telemetry
 
 
 class CollectionTests(unittest.TestCase):
-    def test_network_private_context_is_released_after_success_and_failure(self):
-        for failure in (False, True):
-            with patch.object(telemetry.GLib.MainContext, 'new') as new_context, \
-                    patch.object(telemetry.NM.Client, 'new') as new_client, \
-                    patch.object(telemetry.NM.Client, 'wait_shutdown_finish') as finished, \
-                    patch.object(telemetry, 'network_snapshot', return_value={'connected':True}) as snapshot:
-                client=new_client.return_value
-                client.wait_shutdown.side_effect=lambda integrate,cancel,done:done(None, 'result')
-                if failure:
-                    snapshot.side_effect=RuntimeError('unplugged')
-                    with self.assertRaises(RuntimeError):telemetry.network()
-                else:
-                    self.assertTrue(telemetry.network()['connected'])
-                finished.assert_called_once_with('result')
-                new_context.return_value.pop_thread_default.assert_called_once()
-
     def test_cpu_page_never_probes_unrelated_devices_or_history(self):
         with patch.object(telemetry, 'power_status', return_value={'mode':'system'}) as power, \
                 patch.object(telemetry, 'system', return_value={'profile':'balanced'}), \

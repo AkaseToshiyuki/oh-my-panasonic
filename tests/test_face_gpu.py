@@ -22,9 +22,19 @@ class GpuAuthenticationTests(unittest.TestCase):
             (root/'pou-face-gpu').touch()
             (root/'enabled').touch()
             with patch.object(face, 'GPU_DIR', root), patch.object(face, 'GPU_ENABLED', root/'enabled'), \
+                    patch('panasonic_on_ubuntu.face_gpu.provisioned',return_value={'driver':'/validated/driver.so'}), \
                     patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)) as gpu, \
                     patch('syslog.syslog'):
                 self.assertEqual(face.authenticate('testuser').returncode, 1)
             cpu.assert_not_called()
             self.assertEqual(gpu.call_args.args[0], [root/'pou-face-gpu', 'auth', '-u', 'testuser'])
             self.assertEqual(gpu.call_args.kwargs['env']['LD_LIBRARY_PATH'], f'{root}:{root}/ov')
+            self.assertEqual(gpu.call_args.kwargs['env']['OCL_ICD_VENDORS'],'/validated/driver.so')
+
+    def test_incompatible_provisioning_uses_cpu_without_loading_gpu(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(face,'call') as cpu:
+            root=Path(tmp);(root/'pou-face-gpu').touch();(root/'enabled').touch()
+            with patch.object(face,'GPU_DIR',root),patch.object(face,'GPU_ENABLED',root/'enabled'), \
+                 patch('panasonic_on_ubuntu.face_gpu.provisioned',return_value=None),patch.object(subprocess,'run') as gpu:
+                face.authenticate('testuser')
+            cpu.assert_called_once();gpu.assert_not_called()

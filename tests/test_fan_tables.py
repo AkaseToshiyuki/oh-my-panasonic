@@ -28,6 +28,21 @@ def repository(points=((3132, 40), (3332, 100))):
 
 
 class FanTableTests(unittest.TestCase):
+    def test_cached_sensor_keeps_reading_live_temperature_and_rejects_replacement(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(fan_tables,'THERMAL',Path(folder)):
+            zone=Path(folder)/'thermal_zone0';zone.mkdir()
+            (zone/'type').write_text('SEN4');(zone/'temp').write_text('40000')
+            reader=fan_tables.TemperatureReader()
+            with patch.object(reader,'discover',wraps=reader.discover) as discover:
+                self.assertEqual(reader.read(['SEN4']),{'SEN4':40})
+                (zone/'temp').write_text('80000')
+                self.assertEqual(reader.read(['SEN4']),{'SEN4':80})
+                discover.assert_called_once()
+                zone.rename(Path(folder)/'removed')
+                zone.mkdir();(zone/'type').write_text('different');(zone/'temp').write_text('20000')
+                with self.assertRaises(ValueError):reader.read(['SEN4'])
+                self.assertFalse(reader.paths)
+
     def test_read_real_format_and_reject_corruption(self):
         blob = repository()
         self.assertEqual(fan_tables.parse(blob)['slow']['SEN4'], [(40, 40), (60, 100)])
@@ -68,12 +83,12 @@ class FanTableTests(unittest.TestCase):
             for name,value in {'fan_feedback_percent':20,'fan_profile':0,'package_temperature_c':30,
                                'fan_pwm':0,'software_quiet_curve':1}.items():
                 (root/name).write_text(str(value))
-            with patch.object(fan,'FIRMWARE',root),patch.object(fan,'CONFIG',config),patch.object(fan_tables,'load',return_value=fan_tables.parse(repository())),patch.object(fan_tables,'temperatures',return_value={'SEN4':50}):
+            with patch.object(fan,'FIRMWARE',root),patch.object(fan,'CONFIG',config),patch.object(fan_tables,'load',return_value=fan_tables.parse(repository())),patch.object(fan_tables.TemperatureReader,'read',return_value={'SEN4':50}):
                 controller=fan.Controller()
                 state=controller.tick(0)
                 self.assertEqual(state['policy_source'],'platform-acpr')
                 self.assertEqual(state['requested'],70)
-                with patch.object(fan_tables,'temperatures',return_value={'SEN4':65}):
+                with patch.object(fan_tables.TemperatureReader,'read',return_value={'SEN4':65}):
                     self.assertEqual(controller.tick(0)['requested'],100)
                 config.write_text(json.dumps({'mode':'manual','percent':40}))
                 self.assertEqual(controller.tick(0)['requested'],40)

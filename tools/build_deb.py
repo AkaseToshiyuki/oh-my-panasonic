@@ -9,7 +9,7 @@ from collect_rust_licenses import collect
 from rust_build import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.23.2'
+VERSION = '0.23.4'
 
 def build():
     wheelpad = ROOT/'vendor/letsnote-wheelpad'
@@ -89,7 +89,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: AkaseToshiyuki <51808852+AkaseToshiyuki@users.noreply.github.com>
-Depends: dkms (>= 3.0), python3 (>= 3.10), gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, python3-gi, python3-gi-cairo, python3-evdev, gir1.2-gtk-4.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gir1.2-adw-1, gir1.2-nm-1.0, pulseaudio-utils, power-profiles-daemon, upower, polkitd, pkexec, systemd, udev, libsystemd0, libc6 (>= 2.39), libgcc-s1, libtss2-esys-3.0.2-0t64, libtss2-mu-4.0.1-0t64, libtss2-tctildr0t64
+Depends: dkms (>= 3.0), python3 (>= 3.10), gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, python3-gi, python3-pulsectl, python3-gi-cairo, python3-evdev, gir1.2-gtk-4.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gir1.2-adw-1, gir1.2-nm-1.0, pulseaudio-utils, power-profiles-daemon, upower, polkitd, pkexec, systemd, udev, libsystemd0, libc6 (>= 2.39), libgcc-s1, libtss2-esys-3.0.2-0t64, libtss2-mu-4.0.1-0t64, libtss2-tctildr0t64
 Recommends: network-manager, wireplumber, bluez, gnome-control-center, linux-tools-generic, iw, linux-headers-generic
 Suggests: facelock, panasonic-on-ubuntu-face-gpu
 Conflicts: letsnote-wheelpad, panasonic-on-ubuntu-firmware-dkms, oh-my-panasonic-sr3-dkms

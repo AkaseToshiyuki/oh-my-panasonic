@@ -41,6 +41,7 @@ class SSDTests(unittest.TestCase):
             p=patch.object(ssd,name,value);p.start();self.addCleanup(p.stop)
         self.controller=ssd.Controller()
         p=patch.object(ssd,'Device',return_value=self.device);p.start();self.addCleanup(p.stop)
+        p=patch.object(ssd,'system_controller',return_value=self.device.path);p.start();self.addCleanup(p.stop)
     def tick(self,mode='balanced'):
         self.controller.next_check=0;self.controller.tick(mode);return ssd.status()
     def test_presets_set_operational_states_and_system_restores(self):
@@ -78,6 +79,22 @@ class SSDTests(unittest.TestCase):
 
 
 class DriverTests(unittest.TestCase):
+    def test_static_queries_cached_but_mutation_and_identity_force_refresh(self):
+        device=ssd.Device('/dev/nvme0')
+        def command(op,field,value=0,length=0):
+            return (0,identify_data() if op==6 else bytes(256) if field==12 else b'')
+        with patch.object(device,'identity_stamp',return_value='first') as identity, \
+             patch.object(device,'_command',side_effect=command) as io, \
+             patch.object(device,'active_value',return_value=0), \
+             patch.object(ssd.time,'monotonic',return_value=1):
+            device.read();device.read()
+            self.assertEqual(sum(c.args==(6,1) for c in io.call_args_list),1)
+            device.read(wake=True)
+            self.assertEqual(sum(c.args==(6,1) for c in io.call_args_list),2)
+            identity.return_value='replacement'
+            device.read()
+            self.assertEqual(sum(c.args==(6,1) for c in io.call_args_list),3)
+
     def test_silvermake_table_uses_100_microwatt_units(self):
         raw=bytearray(identify_data())
         raw[24:64]=b'SilverMake 2268XT2 B58R 1TB'.ljust(40)

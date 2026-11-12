@@ -30,11 +30,13 @@ def call(argv, timeout=4, check=True):
 
 
 def authenticate(account):
+    from .face_gpu import provisioned
     helper = GPU_DIR/'pou-face-gpu'
-    if not (GPU_ENABLED.is_file() and helper.is_file()):
+    profile = provisioned(GPU_ENABLED.parent) if GPU_ENABLED.is_file() and helper.is_file() else None
+    if profile is None:
         return call([BACKEND,'auth','-u',account], timeout=12, check=False)
     env = {**FACE_ENV, 'LD_LIBRARY_PATH':f'{GPU_DIR}:{GPU_DIR}/ov',
-           'OCL_ICD_VENDORS':'/usr/lib/x86_64-linux-gnu/intel-opencl/libigdrcl_legacy1.so'}
+           'OCL_ICD_VENDORS':profile['driver']}
     import syslog
     start = time.monotonic()
     result = subprocess.run([helper,'auth','-u',account], timeout=12, env=env,
