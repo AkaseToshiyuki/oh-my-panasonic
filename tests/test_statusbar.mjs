@@ -27,7 +27,7 @@ assert.equal(render(['remaining'],{energy:30,cpu_power:2,discharging:false}),'')
 assert.equal(render(['cpu'],{cpu:.3}),'CPU 0.3%');
 console.log('Statusbar formatting, stale readings and selection checks passed');
 const touch=await readFile(new URL('../extension/touchpad-state.js',import.meta.url),'utf8');
-const {parseState,pulseKind,position}=await import('data:text/javascript;base64,'+Buffer.from(touch).toString('base64'));
+const {parseState,pulseKind,position,visiblePoints}=await import('data:text/javascript;base64,'+Buffer.from(touch).toString('base64'));
 const frame={points:[[30,50],[70,50]],scroll:-1,click:1,tap:0,fingers:2,seq:1};
 assert.deepEqual(parseState(JSON.stringify(frame)),frame);
 assert.equal(pulseKind(frame,true,'fingers'),2);
@@ -36,4 +36,20 @@ assert.equal(pulseKind({...frame,click:0,tap:2},false,'fingers'),0);
 for(const invalid of [{...frame,scroll:3},{...frame,points:[[NaN,2]]},{...frame,seq:-1},{...frame,points:[[1,2],[3,4],[5,6]]}])
     assert.throws(()=>parseState(JSON.stringify(invalid)));
 assert.ok(Math.hypot(...position([100,100],10))<=6.61);
+const triple={...frame,multi:{points:[[20,60],[50,20],[80,60]],fingers:3,click:1,tap:0}};
+const parsed=parseState(JSON.stringify(triple));
+assert.equal(parsed.points.length,3);
+assert.equal(pulseKind(parsed,true,'fingers'),3);
+assert.equal(pulseKind(parsed,true,'areas'),1);
+assert.deepEqual(visiblePoints(parsed),triple.multi.points);
+for(const points of [[[20,50],[80,50]],[[40,50],[50,50],[60,50]]]) {
+    const shown=visiblePoints({...parsed,points});
+    assert.equal(shown.length,3);
+    assert.ok(shown.every((p,i)=>shown.slice(i+1).every(q=>Math.hypot(p[0]-q[0],p[1]-q[1])>=25)));
+}
+assert.equal(pulseKind({...parsed,tap:3},false,'fingers'),0);
+assert.equal(pulseKind({...parsed,tap:3},true,'fingers'),3);
+assert.deepEqual(visiblePoints({...parsed,points:[]}),[]);
+for(const multi of [null,{}, {...triple.multi,fingers:4}, {...triple.multi,points:[[0,-1]]}, {...triple.multi,click:'3'}])
+    assert.throws(()=>parseState(JSON.stringify({...frame,multi})));
 console.log('Touchpad frame validation and gesture rendering checks passed');

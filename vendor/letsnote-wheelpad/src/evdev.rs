@@ -16,6 +16,8 @@ use crate::uinput::{TOUCHPAD_PRODUCT_ID, VENDOR_ID, WHEEL_PRODUCT_ID};
 
 const INACTIVE_TRACKING_ID: i32 = -1;
 const MAX_SUPPORTED_MT_SLOTS: usize = 100;
+const TOOL_COUNTS: [Key; 5] = [Key::BTN_TOOL_FINGER, Key::BTN_TOOL_DOUBLETAP,
+    Key::BTN_TOOL_TRIPLETAP, Key::BTN_TOOL_QUADTAP, Key::BTN_TOOL_QUINTTAP];
 const TOUCHPAD_BUTTONS: [Key; 8] = [
     Key::BTN_LEFT,
     Key::BTN_RIGHT,
@@ -70,6 +72,7 @@ struct FrameState {
     current_slot: Option<usize>,
     contact: bool,
     pressed_buttons: u8,
+    tool_counts: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +81,7 @@ pub struct ContactSnapshot {
     current_slot: Option<usize>,
     contact: bool,
     pressed_buttons: u8,
+    tool_counts: u8,
 }
 
 impl ContactSnapshot {
@@ -142,6 +146,11 @@ impl ContactSnapshot {
 
     pub fn active_count(&self) -> usize {
         self.slots.iter().filter(|slot| slot.tracking_id != INACTIVE_TRACKING_ID).count()
+    }
+
+    pub fn visual_count(&self) -> usize {
+        if !self.contact { return 0; }
+        self.active_count().max((u8::BITS - self.tool_counts.leading_zeros()) as usize)
     }
 
     pub fn positions(&self) -> impl Iterator<Item = TouchSample> + '_ {
@@ -213,6 +222,7 @@ impl ContactSnapshot {
             current_slot,
             contact,
             pressed_buttons: touchpad_button_mask_from_keys(pressed_buttons.iter().copied()),
+            tool_counts: tool_count_mask(pressed_buttons.iter().copied()),
         })
     }
 }
@@ -362,6 +372,7 @@ impl InputDevice {
             current_slot: Some(current_slot),
             contact,
             pressed_buttons: touchpad_button_mask(&key_state),
+            tool_counts: tool_count_mask(key_state.iter()),
         };
 
         Ok(Self {
@@ -498,6 +509,7 @@ impl InputDevice {
             current_slot: Some(current_slot),
             contact,
             pressed_buttons: touchpad_button_mask(&key_state),
+            tool_counts: tool_count_mask(key_state.iter()),
         })
     }
 }
@@ -670,6 +682,11 @@ fn query_slot_values(
     Ok(request.split_off(1))
 }
 
+fn tool_count_mask(keys: impl IntoIterator<Item = Key>) -> u8 {
+    keys.into_iter().fold(0, |mask, key| mask | TOOL_COUNTS.iter()
+        .position(|candidate| *candidate == key).map_or(0, |index| 1 << index))
+}
+
 fn touchpad_button_mask(keys: &evdev::AttributeSet<Key>) -> u8 {
     touchpad_button_mask_from_keys(
         TOUCHPAD_BUTTONS
@@ -817,6 +834,10 @@ impl FrameState {
         }
         if event.event_type() == EventType::KEY {
             let key = Key(event.code());
+            if let Some(index) = TOOL_COUNTS.iter().position(|candidate| *candidate == key) {
+                if event.value() == 0 { self.tool_counts &= !(1 << index); }
+                else { self.tool_counts |= 1 << index; }
+            }
             if let Some(index) = TOUCHPAD_BUTTONS
                 .iter()
                 .position(|candidate| *candidate == key)
@@ -861,6 +882,7 @@ impl FrameState {
             current_slot: self.current_slot,
             contact: self.contact,
             pressed_buttons: self.pressed_buttons,
+            tool_counts: self.tool_counts,
         }
     }
 }
@@ -951,7 +973,22 @@ mod tests {
             current_slot: Some(0),
             contact: true,
             pressed_buttons: 0,
+            tool_counts: 0,
         }
+    }
+
+    #[test]
+    fn visual_tool_count_tracks_key_transitions_and_ignores_hover() {
+        let mut input=state(2);
+        set_contact(&mut input,0,1,20,40);set_contact(&mut input,1,2,80,40);
+        input.apply_event(InputEvent::new(EventType::KEY,Key::BTN_TOOL_TRIPLETAP.0,1)).unwrap();
+        assert_eq!(input.snapshot().visual_count(),3);
+        assert_eq!(input.snapshot().active_count(),2);
+        input.apply_event(InputEvent::new(EventType::KEY,Key::BTN_TOOL_DOUBLETAP.0,1)).unwrap();
+        input.apply_event(InputEvent::new(EventType::KEY,Key::BTN_TOOL_TRIPLETAP.0,0)).unwrap();
+        assert_eq!(input.snapshot().visual_count(),2);
+        input.apply_event(InputEvent::new(EventType::KEY,Key::BTN_TOUCH.0,0)).unwrap();
+        assert_eq!(input.snapshot().visual_count(),0);
     }
 
     fn set_contact(state: &mut FrameState, slot: usize, tracking_id: i32, x: i32, y: i32) {

@@ -23,8 +23,11 @@ pub struct VisualState {
 impl VisualState {
     fn line(&self) -> Vec<u8> {
         let points = self.points.iter().map(|p| format!("[{},{}]", p[0], p[1])).collect::<Vec<_>>().join(",");
-        format!("{{\"points\":[{points}],\"scroll\":{},\"click\":{},\"tap\":{},\"fingers\":{},\"seq\":{}}}\n",
-                self.scroll, self.click, self.tap, self.fingers, self.seq).into_bytes()
+        // Keep old desktop sessions readable until the extension is reloaded.
+        let legacy = self.points.iter().take(2).map(|p| format!("[{},{}]", p[0], p[1])).collect::<Vec<_>>().join(",");
+        format!("{{\"points\":[{legacy}],\"scroll\":{},\"click\":{},\"tap\":{},\"fingers\":{},\"seq\":{},\"multi\":{{\"points\":[{points}],\"click\":{},\"tap\":{},\"fingers\":{}}}}}\n",
+                self.scroll, if self.click<=2 {self.click} else {0}, if self.tap<=2 {self.tap} else {0}, self.fingers.min(2), self.seq,
+                self.click, self.tap, self.fingers).into_bytes()
     }
 }
 
@@ -46,16 +49,17 @@ impl Observer {
     }
 
     pub fn observe(&mut self, frame: &PhysicalFrame, scrolling: bool, now: Instant) -> VisualState {
-        let contacts: Vec<_> = frame.contacts.positioned_contacts().take(2).map(|(id,p)| {
+        let contacts: Vec<_> = frame.contacts.positioned_contacts().take(3).map(|(id,p)| {
             let normalize = |v: i32, lo: i32, hi: i32| ((i64::from(v)-i64::from(lo))*100/i64::from((hi-lo).max(1))).clamp(0,100) as u8;
             (id,[normalize(p.x,self.bounds[0],self.bounds[1]),normalize(p.y,self.bounds[2],self.bounds[3])])
         }).collect();
         let points:Vec<_>=contacts.iter().map(|(_,point)|*point).collect();
-        let count = frame.contacts.active_count();
+        let count = frame.contacts.visual_count();
         let button = if frame.contacts.button_down(Key::BTN_RIGHT) { 2 }
+                     else if frame.contacts.button_down(Key::BTN_MIDDLE) { 3 }
                      else if frame.contacts.button_down(Key::BTN_LEFT) { 1 } else { 0 };
         let mut state = VisualState { points: points.clone(), seq: self.state.seq,
-                                     fingers: count.min(2) as u8, ..VisualState::default() };
+                                     fingers: count.min(3) as u8, ..VisualState::default() };
         if !points.is_empty() && self.down.is_none() {
             self.down=Some(now); self.origins.clear(); self.peak=0; self.cancelled=false;
         }
@@ -67,14 +71,14 @@ impl Observer {
                 if dx*dx+dy*dy>36 { self.cancelled=true; }
             } else { self.origins.insert(*id,*point); }
         }
-        self.cancelled |= scrolling || frame.reconciled || count>2 || button!=0;
+        self.cancelled |= scrolling || frame.reconciled || count>3 || button!=0;
         if button!=0 && !self.pressed {
             state.click=button; state.seq=state.seq.wrapping_add(1);
         }
         self.pressed=button!=0;
         if points.is_empty() {
             if let Some(start)=self.down.take() {
-                if !self.cancelled && self.peak>0 && self.peak<=2 && now.duration_since(start)<=Duration::from_millis(220) {
+                if !self.cancelled && self.peak>0 && self.peak<=3 && now.duration_since(start)<=Duration::from_millis(220) {
                     state.tap=self.peak as u8; state.fingers=state.tap; state.seq=state.seq.wrapping_add(1);
                 }
             }
@@ -164,7 +168,7 @@ impl Publisher {
     pub fn publish(&mut self, state: VisualState, now: Instant) {
         self.state=state;
         if self.clients.is_empty() || self.state==self.sent { return; }
-        let transition=self.state.seq!=self.sent.seq || self.state.points.len()!=self.sent.points.len() || self.state.scroll!=self.sent.scroll;
+        let transition=self.state.seq!=self.sent.seq || self.state.fingers!=self.sent.fingers || self.state.points.len()!=self.sent.points.len() || self.state.scroll!=self.sent.scroll;
         if !transition && now.duration_since(self.last)<Duration::from_millis(50) { return; }
         let bytes=self.state.line(); self.clients.retain(|c| send(c,&bytes));
         self.sent=self.state.clone(); self.last=now;
@@ -216,6 +220,37 @@ mod tests {
         let remaining=PhysicalFrame::from_parts(ContactSnapshot::from_slot_values(&[(-1,30,40),(1,70,40)],Some(1),true).unwrap(),vec![],false);
         observer.observe(&remaining,false,now+Duration::from_millis(90));
         assert_eq!(observer.observe(&frame(&[],&[]),false,now+Duration::from_millis(110)).tap,2);
+    }
+    #[test]
+    fn three_fingers_keep_all_positions_and_staggered_tap() {
+        let mut observer=Observer::new([0,100,0,100]);let now=Instant::now();
+        let state=observer.observe(&frame(&[(20,50),(50,40),(80,50)],&[]),false,now);
+        assert_eq!(state.points,vec![[20,50],[50,40],[80,50]]);
+        assert_eq!(state.fingers,3);
+        let wire=String::from_utf8(state.line()).unwrap();
+        assert!(wire.contains("\"points\":[[20,50],[50,40]],"));
+        assert!(wire.contains("\"multi\":{\"points\":[[20,50],[50,40],[80,50]]"));
+        observer.observe(&frame(&[(20,50),(50,40)],&[]),false,now+Duration::from_millis(60));
+        let lifted=observer.observe(&frame(&[],&[]),false,now+Duration::from_millis(100));
+        assert_eq!(lifted.tap,3);
+        assert!(String::from_utf8(lifted.line()).unwrap().contains("\"click\":0,\"tap\":0,\"fingers\":2"));
+    }
+    #[test]
+    fn limited_slots_use_reported_finger_count_without_inventing_coordinates() {
+        let mut observer=Observer::new([0,100,0,100]);let now=Instant::now();
+        let state=observer.observe(&frame(&[(20,50),(80,50)],&[Key::BTN_TOOL_TRIPLETAP]),false,now);
+        assert_eq!(state.fingers,3);assert_eq!(state.points.len(),2);
+        assert_eq!(observer.observe(&frame(&[],&[]),false,now+Duration::from_millis(100)).tap,3);
+        observer.observe(&frame(&[(20,50),(80,50)],&[Key::BTN_TOOL_QUADTAP]),false,now);
+        assert_eq!(observer.observe(&frame(&[],&[]),false,now+Duration::from_millis(100)).tap,0);
+    }
+    #[test]
+    fn three_finger_swipe_does_not_flash_as_tap() {
+        let mut observer=Observer::new([0,100,0,100]);let now=Instant::now();
+        observer.observe(&frame(&[(20,50),(50,50),(80,50)],&[]),false,now);
+        observer.observe(&frame(&[(20,50),(50,50),(80,70)],&[]),false,now);
+        assert_eq!(observer.observe(&frame(&[],&[]),false,now+Duration::from_millis(100)).tap,0);
+        assert_eq!(observer.observe(&frame(&[(20,50),(50,50),(80,50)],&[Key::BTN_MIDDLE]),false,now).click,3);
     }
     #[test]
     fn disconnected_reader_never_blocks_or_raises_sigpipe() {

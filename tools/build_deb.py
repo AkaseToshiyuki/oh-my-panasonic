@@ -9,7 +9,7 @@ from collect_rust_licenses import collect
 from rust_build import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.23.4'
+VERSION = '0.23.5'
 
 def build():
     wheelpad = ROOT/'vendor/letsnote-wheelpad'

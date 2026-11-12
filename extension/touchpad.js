@@ -2,7 +2,7 @@ import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import {parseState,pulseKind,position} from './touchpad-state.js';
+import {parseState,pulseKind,position,visiblePoints} from './touchpad-state.js';
 
 const DIRECTORY='/run/pou-input';
 const SOCKET=DIRECTORY+'/events.sock';
@@ -70,12 +70,12 @@ export class TouchpadIndicator {
     }
     accept(state) {
         this.state=state;
-        if (state.points.length) this.lastPoints=state.points;
+        if (state.points.length) this.lastPoints=visiblePoints(state);
         const pulse=pulseKind(state,this.settings.get_boolean('tap-to-click'),this.settings.get_string('click-method'));
         if (this.seq!==null && state.seq!==this.seq && pulse) {
             if (this.flashTimer) GLib.Source.remove(this.flashTimer);
             this.flash=pulse;this.phase=0;
-            this.flashPoints=this.lastPoints.length===pulse ? this.lastPoints : pulse===2 ? [[35,50],[65,50]] : [[50,50]];
+            this.flashPoints=this.lastPoints.length===pulse ? this.lastPoints : pulse===3 ? [[22,62],[50,25],[78,62]] : pulse===2 ? [[35,50],[65,50]] : [[50,50]];
             this.flashTimer=GLib.timeout_add(GLib.PRIORITY_DEFAULT,85,()=>{
                 if (++this.phase>=4) {this.flash=0;this.flashTimer=0;this.area.queue_repaint();return GLib.SOURCE_REMOVE;}
                 this.area.queue_repaint();return GLib.SOURCE_CONTINUE;
@@ -99,9 +99,11 @@ export class TouchpadIndicator {
             const x=cx+r*Math.cos(b),y=cy+r*Math.sin(b),tx=-Math.sin(b)*dir,ty=Math.cos(b)*dir;
             cr.moveTo(x,y);cr.lineTo(x-4*tx+2*ty,y-4*ty-2*tx);cr.lineTo(x-4*tx-2*ty,y-4*ty+2*tx);cr.closePath();cr.fill();
         } else {cr.setSourceRGBA(...rgb,.8);cr.arc(cx,cy,r,0,Math.PI*2);cr.stroke();}
-        const points=this.flash ? this.flashPoints : this.state.points;
+        const points=this.flash ? this.flashPoints : visiblePoints(this.state);
         const alpha=this.flash && this.phase%2 ? .15 : 1;
-        if (this.flash===2)cr.setSourceRGBA(.3,1,.45,alpha);else cr.setSourceRGBA(...rgb,alpha);
+        if (this.flash===2)cr.setSourceRGBA(.3,1,.45,alpha);
+        else if(this.flash===3)cr.setSourceRGBA(.45,.7,1,alpha);
+        else cr.setSourceRGBA(...rgb,alpha);
         for(const point of points) {const [x,y]=position(point,r);cr.arc(cx+x,cy+y,points.length>1?1.7:2,0,Math.PI*2);cr.fill();}
         cr.$dispose();
     }
