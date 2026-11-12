@@ -193,10 +193,14 @@ def offline_requested(config, state, now, setting):
 
 def arm_offline(action):
     bit, setting = {'suspend': (1, 'sleep_hold'), 'poweroff': (2, 'poweroff_hold')}[action]
-    if action == 'suspend' and '[deep]' not in (read(Path('/sys/power/mem_sleep')) or ''):
-        return
     if not int(read(FIRMWARE/'offline_capabilities') or 0) & bit:
         return
+    if action == 'suspend':
+        sleep_mode = read(Path('/sys/power/mem_sleep')) or ''
+        if '[deep]' not in sleep_mode:
+            from .hardware import selection
+            if '[s2idle]' not in sleep_mode or selection()[0] != 'sr3':
+                return
     config = config_valid(load(CONFIG, DEFAULT))
     state = load(STATE, {})
     enabled = offline_requested(config, state, time.time(), setting)

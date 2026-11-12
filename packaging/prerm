@@ -21,6 +21,11 @@ case "$1" in
                 runuser -u "$username" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" gnome-extensions disable panasonic-on-ubuntu@local || true
             fi
         done
+        getent passwd | while IFS=: read -r username unused uid gid description userhome usershell; do
+            if [ "$uid" -ge 1000 ] && [ "$uid" -lt 65534 ] && [ -d "$userhome" ]; then
+                runuser -u "$username" -- /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.panel import reset_history_initialization; reset_history_initialization()' || true
+            fi
+        done
         ;;
     upgrade)
         if dpkg --compare-versions "$2" lt 0.16.2; then

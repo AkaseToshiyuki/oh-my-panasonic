@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oh-my-panasonic"
-version = "0.23.0"
+version = "0.23.2"
 authors = [{name = "AkaseToshiyuki"}]
 maintainers = [{name = "AkaseToshiyuki"}]
 description = "Battery care, WheelPad and guarded hardware controls for Panasonic laptops"

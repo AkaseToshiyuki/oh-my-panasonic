@@ -491,5 +491,5 @@ module_init(pou_init);
 module_exit(pou_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AkaseToshiyuki");
-MODULE_VERSION("0.8.0");
+MODULE_VERSION("0.8.1");
 MODULE_DESCRIPTION("Model-scoped Panasonic firmware fan profile and read-only ECO status");

@@ -7,6 +7,11 @@ from panasonic_on_ubuntu import fan
 
 
 class FanControlTests(unittest.TestCase):
+    def setUp(self):
+        mocked = patch.object(fan.fan_tables, 'load', return_value=None)
+        mocked.start()
+        self.addCleanup(mocked.stop)
+
     def test_invalid_curves_and_types(self):
         for values in ([40, 50, 75, 70, 100], [40, 50, 65, 80, 90], [20, 40], [False, 50, 60, 80, 100]):
             with self.assertRaises(ValueError):

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import re
 import time
+import errno
 
 
 PORT = Path('/sys/class/typec/port0')
@@ -77,6 +78,10 @@ def cached_profiles(record):
 
 
 def query(command):
+    # Some kernels retain debugfs files after failed UCSI initialization.
+    # Their presence does not establish a usable connector object.
+    if not PORT.is_dir() or not SUPPLY.is_dir():
+        raise OSError(errno.ENODEV, 'USB-C controller is not initialized')
     DEBUG.joinpath('command').write_text(hex(command)+'\n')
     return DEBUG.joinpath('response').read_text().strip()
 

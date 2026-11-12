@@ -6,8 +6,9 @@ import sys
 
 DMI = Path('/sys/class/dmi/id')
 LOAD = Path('/etc/modules-load.d/oh-my-panasonic.conf')
-BACKENDS = {'sv7': ('pou-firmware', '0.8.0'), 'sr3': ('pou-sr3-fan', '0.2.0')}
-LEGACY = (('pou-firmware','0.7.1'), ('pou-firmware','0.7.2'), ('pou-sr3-fan','0.1.0'))
+BACKENDS = {'sv7': ('pou-firmware', '0.8.1'), 'sr3': ('pou-sr3-fan', '0.2.1')}
+LEGACY = (('pou-firmware','0.7.1'), ('pou-firmware','0.7.2'), ('pou-firmware','0.8.0'),
+          ('pou-sr3-fan','0.1.0'), ('pou-sr3-fan','0.2.0'))
 
 
 def selection(identity=None):

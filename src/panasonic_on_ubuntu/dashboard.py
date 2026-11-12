@@ -726,4 +726,8 @@ class App(Adw.Application):
         finally:self.updating=False
 
 
-def run(page=None):App().run(['pou']+([page] if page else []))
+def run(page=None):
+    from threading import Thread
+    from .panel import initialize_history
+    Thread(target=initialize_history,daemon=True).start()
+    App().run(['pou']+([page] if page else []))

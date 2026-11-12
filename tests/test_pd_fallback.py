@@ -13,6 +13,14 @@ STATUS = '0x000000000000000033029ca7402b5b26'
 
 
 class PDFallbackTests(unittest.TestCase):
+    def test_failed_controller_initialization_never_opens_debug_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with patch.object(pd,'PORT',root/'missing'),patch.object(pd,'SUPPLY',root/'supply'),patch.object(Path,'write_text') as write:
+                with self.assertRaises(OSError):
+                    pd.query(0x10012)
+                write.assert_not_called()
+
     def test_power_service_does_not_issue_raw_pd_queries(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)/'pd.json'

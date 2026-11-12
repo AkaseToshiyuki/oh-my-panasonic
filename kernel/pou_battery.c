@@ -24,7 +24,7 @@ static const char *reason = "automatic";
 static unsigned int armed_transition;
 static unsigned long arm_deadline;
 static bool offline_held;
-static unsigned int offline_caps; /* bit 0: deep suspend, bit 1: complete power-off */
+static unsigned int offline_caps; /* bit 0: validated suspend, bit 1: complete power-off */
 static const char *ec_command;
 
 /* Called with battery_lock held. The only caller-controlled values are our
@@ -299,7 +299,7 @@ static int __init battery_init(void)
     } else if (dmi_match(DMI_PRODUCT_NAME,"CFSR3-1") && dmi_match(DMI_BIOS_VERSION,"V1.00L12") &&
                dmi_match(DMI_PRODUCT_SKU,"CF-SR3SKAKS")) {
         ec_command = "\\_SB.PC00.LPCB.EC0.EC88";
-        offline_caps = 0;
+        offline_caps = 3;
     } else return -ENODEV;
     mutex_lock(&battery_lock);
     error = ac_state(&actual);
@@ -342,5 +342,5 @@ static void __exit battery_exit(void)
 module_init(battery_init); module_exit(battery_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AkaseToshiyuki");
-MODULE_VERSION("0.8.0");
+MODULE_VERSION("0.8.1");
 MODULE_DESCRIPTION("Validated Panasonic battery controls with expiring kernel lease");

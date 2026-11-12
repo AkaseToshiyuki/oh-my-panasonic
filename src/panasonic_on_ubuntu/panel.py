@@ -29,7 +29,27 @@ def hide():
     subprocess.run(['systemctl', '--user', 'stop', 'pou-tray.service'], check=True, timeout=10)
 
 
+def initialize_history():
+    marker = HIDDEN.parent / 'history-initialized'
+    if marker.exists():
+        return
+    try:
+        subprocess.run(['systemctl','--user','enable','--now','pou-monitor.timer'],
+                       check=True,timeout=10,capture_output=True)
+        marker.parent.mkdir(parents=True,exist_ok=True)
+        marker.touch(mode=0o600)
+    except (OSError, subprocess.SubprocessError):
+        # A missing user bus must not prevent opening the controls. Retry on
+        # the next session; an initialized user's explicit disable is retained.
+        pass
+
+
+def reset_history_initialization():
+    (HIDDEN.parent / 'history-initialized').unlink(missing_ok=True)
+
+
 def show(autostart=False):
+    initialize_history()
     if autostart:
         if HIDDEN.exists():
             return
