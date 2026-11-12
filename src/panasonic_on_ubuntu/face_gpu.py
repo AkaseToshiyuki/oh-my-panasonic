@@ -1,5 +1,6 @@
 """Select a validated GPU driver without changing authentication policy."""
 import json
+import re
 from pathlib import Path
 from .hardware import selection
 
@@ -8,6 +9,21 @@ PROFILES={
     ('sv7','0x5917'):'/usr/lib/x86_64-linux-gnu/intel-opencl/libigdrcl_legacy1.so',
     ('sr3','0x46a8'):'/usr/lib/x86_64-linux-gnu/intel-opencl/libigdrcl.so',
 }
+
+_TIMING_KEYS = ('preflight', 'models', 'camera', 'templates', 'warmup', 'recognition', 'total')
+_TIMING_LINE = re.compile('OMP_FACE_TIMING ' + ' '.join(
+    key + r'_ms=(\d{1,5}\.\d{3})' for key in _TIMING_KEYS))
+
+
+def timing_fields(stderr):
+    """Accept only bounded stage durations, without forwarding biometric output."""
+    if not isinstance(stderr, str):
+        return ''
+    for line in stderr.splitlines():
+        match = _TIMING_LINE.fullmatch(line)
+        if match and all(float(value) <= 60000 for value in match.groups()):
+            return ' ' + line.removeprefix('OMP_FACE_TIMING ')
+    return ''
 
 
 def profile():

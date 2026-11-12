@@ -13,10 +13,28 @@ index 0000000..87a5206
 +    std::process::exit(code);
 +}
 diff --git a/crates/facelock-cli/src/commands/auth.rs b/crates/facelock-cli/src/commands/auth.rs
-index a9d6ce5..d4f08fa 100644
+index a9d6ce5..b1dbb09 100644
 --- a/crates/facelock-cli/src/commands/auth.rs
 +++ b/crates/facelock-cli/src/commands/auth.rs
-@@ -94,7 +94,7 @@ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
+@@ -7,6 +7,9 @@
+ //! [`EXIT_SUPPRESSED`] are the implementation.
+
+ use std::path::Path;
++mod timing;
++mod startup;
++use timing::Phase;
+
+ use facelock_camera::quirks::QuirksDb;
+ use facelock_camera::{Camera, ResolvedCamera, auto_detect_device_with, validate_device};
+@@ -23,6 +26,7 @@ use facelock_store::FaceStore;
+ use tracing::{debug, error, info};
+
+ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
++    let timings = timing::Timings::new();
+     // Deliberate parse (D7): `facelock auth` is its own one-shot process
+     // spawned by PAM, so this is its top-of-process read — not a re-read.
+     let config = match config_path {
+@@ -94,7 +98,7 @@ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
      // `create`: on a genuinely fresh install this is what brings the
      // rate-limiter's storage into being, so switching to `open_existing` would
      // change auth-path behaviour, not harden it.
@@ -25,30 +43,96 @@ index a9d6ce5..d4f08fa 100644
          Ok(s) => s,
          Err(e) => {
              error!("database: {e}");
-@@ -237,35 +237,32 @@ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
+@@ -146,7 +150,7 @@ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
+     //
+     // Metadata only (ids, labels, device ids): no embeddings cross the camera
+     // bring-up because of this line. `load_user_embeddings`, which does carry
+-    // plaintext biometric material, deliberately stays below.
++    // plaintext biometric material, stays below the preflight gates.
+     let listed = store.list_models(&user);
 
-     // Negotiation may drift from the preflight FourCC. Do not let warmup
-     // capture precede the auth loop's stable unverified-Y16 rejection.
+     // Converge this user's enrollment marker from the list we just read (#137).
+@@ -202,24 +206,49 @@ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
+         .and_then(|q| q.warmup_frames)
+         .unwrap_or(config.device.warmup_frames);
+
+-    let (mut engine, mut camera) = match start_engine_then_camera(
+-        &cancel,
+-        || {
+-            FaceEngine::load(&config.recognition, Path::new(&config.daemon.model_dir))
+-                .map_err(|e| e.to_string())
+-        },
++    timings.preflight_complete();
++    if cancel.is_cancelled() {
++        return 2;
++    }
++    let db = &mut store;
++    let clock = &timings;
++    let cfg = &config;
++    let account = &user;
++    let (resources, stored) = startup::parallel(
++        move || clock.measure(Phase::Templates, || {
++            crate::direct::load_user_embeddings(db, cfg, account).map(startup::Templates::new)
++        }),
+         || {
+-            match resolved {
+-                // The camera carries the caps the pre-flight gates just checked.
+-                Some(resolved) => resolved.open(&config.device),
+-                // Unqueryable at resolution time: attempt a fresh
+-                // resolve-and-open so the failure surfaces as the camera
+-                // error it is.
+-                None => Camera::open(&config.device, &quirks),
++            let (engine, mut camera) = start_engine_then_camera(
++                &cancel,
++                || {
++                    timings.measure(Phase::Models, || FaceEngine::load(&config.recognition, Path::new(&config.daemon.model_dir))
++                        .map_err(|e| e.to_string()))
++                },
++                || timings.measure(Phase::Camera, || {
++                    match resolved {
++                        // The camera carries the caps the pre-flight gates just checked.
++                        Some(resolved) => resolved.open(&config.device),
++                        // Unqueryable at resolution time: attempt a fresh
++                        // resolve-and-open so the failure surfaces as the camera
++                        // error it is.
++                        None => Camera::open(&config.device, &quirks),
++                    }
++                    .map_err(|e| e.to_string())
++                }),
++            )?;
++            if camera.capabilities().ir_texture_scale != facelock_core::types::IrTextureScale::UnverifiedY16 {
++                timings.measure(Phase::Warmup, || {
++                    for _ in 0..warmup {
++                        if cancel.is_cancelled() { break; }
++                        let _ = camera.capture();
++                    }
++                });
+             }
+-            .map_err(|e| e.to_string())
++            Ok((engine, camera))
+         },
+-    ) {
++    );
++    let (mut engine, mut camera) = match resources {
+         Ok(pair) => pair,
+         Err(StartupAbort::Cancelled) => {
+             info!(user = %user, "cancelled");
+@@ -234,51 +263,31 @@ pub fn run(user: String, config_path: Option<String>, verbose: u8) -> i32 {
+             return 2;
+         }
+     };
+-
+-    // Negotiation may drift from the preflight FourCC. Do not let warmup
+-    // capture precede the auth loop's stable unverified-Y16 rejection.
 -    if camera.capabilities().ir_texture_scale != facelock_core::types::IrTextureScale::UnverifiedY16
 -    {
 -        for _ in 0..warmup {
 -            if cancel.is_cancelled() {
 -                info!(user = %user, "cancelled");
 -                return 2;
-+    // Both operations start after the camera is open and the original preflight has passed.
-+    // Keep the TPM per attempt. A cancelled request joins the reader and wipes its result.
-+    let stored = std::thread::scope(|scope| {
-+        let db = &mut store;
-+        let cfg = &config;
-+        let account = &user;
-+        let templates = scope.spawn(move || crate::direct::load_user_embeddings(db, cfg, account));
-+        if camera.capabilities().ir_texture_scale != facelock_core::types::IrTextureScale::UnverifiedY16 {
-+            for _ in 0..warmup {
-+                if cancel.is_cancelled() { break; }
-+                let _ = camera.capture();
-             }
+-            }
 -            let _ = camera.capture();
-         }
+-        }
 -    }
 -
 -    // Load embeddings through the decryption-aware path so the oneshot binary
@@ -64,8 +148,7 @@ index a9d6ce5..d4f08fa 100644
 -    // matching the daemon handler's `-2` storage reply for the same failure.
 -    let mut stored = match crate::direct::load_user_embeddings(&store, &config, &user) {
 -        Ok(v) => v,
-+        templates.join().map_err(|_| anyhow::anyhow!("template worker exited")).and_then(|v| v)
-+    });
++    let stored = stored.map_err(|_| anyhow::anyhow!("template worker exited")).and_then(|v| v);
 +    let mut stored = match stored {
 +        Ok(rows) => rows,
          Err(e) => {
@@ -74,12 +157,180 @@ index a9d6ce5..d4f08fa 100644
          }
      };
 +    if cancel.is_cancelled() {
-+        facelock_core::types::zeroize_stored_embeddings(&mut stored);
++        // The startup guard wipes decrypted templates on this return.
 +        return 2;
 +    }
 
      let start = std::time::Instant::now();
      // Wipes `stored` (D11): nothing below may read the plaintext set again.
+-    let response = facelock_daemon::auth::authenticate_with_embeddings(
++    let response = timings.measure(Phase::Recognition, || facelock_daemon::auth::authenticate_with_embeddings(
+         &mut camera,
+         &mut engine,
+-        &mut stored,
++        stored.as_mut_slice(),
+         &models,
+         &config,
+         &user,
+         AuditSource::Oneshot,
+         &cancel,
+-    );
++    ));
+     let duration_ms = start.elapsed().as_millis() as u64;
+
+     // Note: authenticate_with_embeddings already writes audit entries for the
+diff --git a/crates/facelock-cli/src/commands/auth/startup.rs b/crates/facelock-cli/src/commands/auth/startup.rs
+new file mode 100644
+index 0000000..b136709
+--- /dev/null
++++ b/crates/facelock-cli/src/commands/auth/startup.rs
+@@ -0,0 +1,102 @@
++use facelock_core::types::{FaceEmbedding, zeroize_stored_embeddings};
++
++/// Own the decrypted set through startup, including cancellation and unwinding.
++pub(super) struct Templates<T: AsMut<[(u32, FaceEmbedding)]>>(T);
++
++impl<T: AsMut<[(u32, FaceEmbedding)]>> Templates<T> {
++    pub(super) fn new(rows: T) -> Self { Self(rows) }
++    pub(super) fn as_mut_slice(&mut self) -> &mut [(u32, FaceEmbedding)] { self.0.as_mut() }
++}
++
++impl<T: AsMut<[(u32, FaceEmbedding)]>> Drop for Templates<T> {
++    fn drop(&mut self) { zeroize_stored_embeddings(self.0.as_mut()); }
++}
++
++/// Always join the per-attempt reader, even when foreground startup fails.
++pub(super) fn parallel<T: Send, R>(
++    load_templates: impl FnOnce() -> T + Send,
++    foreground: impl FnOnce() -> R,
++) -> (R, std::thread::Result<T>) {
++    std::thread::scope(|scope| {
++        let reader = scope.spawn(load_templates);
++        let result = foreground();
++        (result, reader.join())
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::{Arc, Barrier, atomic::{AtomicBool, Ordering}};
++    use std::panic::{AssertUnwindSafe, catch_unwind};
++
++    #[test]
++    fn resources_and_templates_make_progress_together() {
++        let barrier = Arc::new(Barrier::new(2));
++        let reader_barrier = barrier.clone();
++        let (result, rows) = parallel(move || { reader_barrier.wait(); 42 }, || { barrier.wait(); 7 });
++        assert_eq!(result, 7);
++        assert_eq!(rows.unwrap(), 42);
++    }
++
++    #[test]
++    fn early_resource_failure_still_joins_and_wipes_templates() {
++        let mut rows = vec![(1, [0.75; 512])];
++        let finished = AtomicBool::new(false);
++        let (result, templates) = parallel(
++            || { finished.store(true, Ordering::SeqCst); Templates::new(rows.as_mut_slice()) },
++            || Err::<(), _>("camera unavailable"),
++        );
++        assert_eq!(result, Err("camera unavailable"));
++        assert!(finished.load(Ordering::SeqCst));
++        drop(templates);
++        assert!(rows[0].1.iter().all(|x| *x == 0.0));
++    }
++
++    #[test]
++    fn foreground_panic_joins_and_wipes_unclaimed_result() {
++        let mut rows = vec![(1, [0.75; 512])];
++        let barrier = Barrier::new(2);
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            parallel(|| { let protected = Templates::new(rows.as_mut_slice()); barrier.wait(); protected },
++                     || -> () { barrier.wait(); panic!("startup failed") });
++        }));
++        assert!(result.is_err());
++        assert!(rows[0].1.iter().all(|x| *x == 0.0));
++    }
++
++    #[test]
++    fn reader_error_is_preserved() {
++        let (resource, rows) = parallel(|| Err::<(), _>("TPM unavailable"), || 7);
++        assert_eq!(resource, 7);
++        assert_eq!(rows.unwrap(), Err("TPM unavailable"));
++    }
++
++    #[test]
++    fn reader_panic_is_an_error_and_wipes_owned_rows() {
++        let mut rows = vec![(1, [0.75; 512])];
++        let (_, result) = parallel(|| { let _protected = Templates::new(rows.as_mut_slice()); panic!("reader failed") }, || ());
++        assert!(result.is_err());
++        assert!(rows[0].1.iter().all(|x| *x == 0.0));
++    }
++
++    #[test]
++    fn cancellation_drops_pending_templates_without_comparing() {
++        let mut rows = vec![(1, [0.75; 512])];
++        let (cancelled, result) = parallel(|| Templates::new(rows.as_mut_slice()), || true);
++        assert!(cancelled);
++        drop(result);
++        assert!(rows[0].1.iter().all(|x| *x == 0.0));
++    }
++
++    #[test]
++    fn successful_handoff_preserves_values_until_finished() {
++        let mut rows = vec![(1, [0.75; 512])];
++        {
++            let (_, templates) = parallel(|| Templates::new(rows.as_mut_slice()), || ());
++            let mut templates = templates.unwrap();
++            assert_eq!(templates.as_mut_slice()[0].1[0], 0.75);
++        }
++        assert!(rows[0].1.iter().all(|x| *x == 0.0));
++    }
++}
+diff --git a/crates/facelock-cli/src/commands/auth/timing.rs b/crates/facelock-cli/src/commands/auth/timing.rs
+new file mode 100644
+index 0000000..7decf98
+--- /dev/null
++++ b/crates/facelock-cli/src/commands/auth/timing.rs
+@@ -0,0 +1,38 @@
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::time::Instant;
++
++#[derive(Clone, Copy)]
++pub enum Phase { Preflight, Models, Camera, Templates, Warmup, Recognition }
++
++pub struct Timings {
++    started: Instant,
++    micros: [AtomicU64; 6],
++}
++
++impl Timings {
++    pub fn new() -> Self {
++        Self { started: Instant::now(), micros: std::array::from_fn(|_| AtomicU64::new(0)) }
++    }
++    pub fn preflight_complete(&self) {
++        self.micros[Phase::Preflight as usize].store(self.started.elapsed().as_micros() as u64, Ordering::Relaxed);
++    }
++    pub fn guard(&self, phase: Phase) -> Measurement<'_> {
++        Measurement { started: Instant::now(), output: &self.micros[phase as usize] }
++    }
++    pub fn measure<T>(&self, phase: Phase, call: impl FnOnce() -> T) -> T {
++        let _measurement = self.guard(phase);
++        call()
++    }
++}
++
++impl Drop for Timings {
++    fn drop(&mut self) {
++        let ms = self.micros.each_ref().map(|v| v.load(Ordering::Relaxed) as f64 / 1000.0);
++        eprintln!("OMP_FACE_TIMING preflight_ms={:.3} models_ms={:.3} camera_ms={:.3} templates_ms={:.3} warmup_ms={:.3} recognition_ms={:.3} total_ms={:.3}", ms[0], ms[1], ms[2], ms[3], ms[4], ms[5], self.started.elapsed().as_secs_f64()*1000.0);
++    }
++}
++
++pub struct Measurement<'a> { started: Instant, output: &'a AtomicU64 }
++impl Drop for Measurement<'_> {
++    fn drop(&mut self) { self.output.fetch_add(self.started.elapsed().as_micros() as u64, Ordering::Relaxed); }
++}
 diff --git a/crates/facelock-face/src/detector.rs b/crates/facelock-face/src/detector.rs
 index 4c351ee..56ded50 100644
 --- a/crates/facelock-face/src/detector.rs

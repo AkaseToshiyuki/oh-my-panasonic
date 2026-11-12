@@ -5,9 +5,22 @@ from pathlib import Path
 from unittest.mock import patch
 
 from panasonic_on_ubuntu import face
+from panasonic_on_ubuntu.face_gpu import timing_fields
 
 
 class GpuAuthenticationTests(unittest.TestCase):
+    def test_timing_accepts_durations_and_drops_other_output(self):
+        fields = 'preflight_ms=2.001 models_ms=400.123 camera_ms=20.004 templates_ms=700.001 warmup_ms=50.000 recognition_ms=320.000 total_ms=1030.000'
+        self.assertEqual(timing_fields('private output\nOMP_FACE_TIMING ' + fields + '\nother output'), ' ' + fields)
+
+    def test_timing_rejects_non_finite_overlong_or_extra_fields(self):
+        fields = 'preflight_ms=2.001 models_ms=400.123 camera_ms=20.004 templates_ms=700.001 warmup_ms=50.000 recognition_ms=320.000 total_ms=1030.000'
+        for value in (None, '', 'OMP_FACE_TIMING ' + fields + ' identity=someone',
+                      'OMP_FACE_TIMING ' + fields.replace('1030.000', 'nan'),
+                      'OMP_FACE_TIMING ' + fields.replace('1030.000', '60000.001'),
+                      'OMP_FACE_TIMING ' + fields.replace('1030.000', '-1.000')):
+            self.assertEqual(timing_fields(value), '')
+
     def test_cpu_when_gpu_is_unprovisioned(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(face, 'call') as cpu:
             root = Path(tmp)

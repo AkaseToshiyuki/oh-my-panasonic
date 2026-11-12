@@ -30,7 +30,7 @@ def call(argv, timeout=4, check=True):
 
 
 def authenticate(account):
-    from .face_gpu import provisioned
+    from .face_gpu import provisioned, timing_fields
     helper = GPU_DIR/'pou-face-gpu'
     profile = provisioned(GPU_ENABLED.parent) if GPU_ENABLED.is_file() and helper.is_file() else None
     if profile is None:
@@ -42,7 +42,8 @@ def authenticate(account):
     result = subprocess.run([helper,'auth','-u',account], timeout=12, env=env,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True)
     elapsed_ms = round((time.monotonic()-start)*1000)
-    syslog.syslog(syslog.LOG_INFO, f'pou-face-gpu exit={result.returncode} elapsed_ms={elapsed_ms}')
+    syslog.syslog(syslog.LOG_INFO, f'pou-face-gpu exit={result.returncode} elapsed_ms={elapsed_ms}'
+                  + timing_fields(result.stderr))
     return result
 
 

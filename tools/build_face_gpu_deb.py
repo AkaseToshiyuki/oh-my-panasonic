@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import zipfile
@@ -16,7 +17,7 @@ SOURCE = ROOT/'src/face-gpu'
 REV = '352bbbcb0f8f61cc21e36a1f038442e94fa6e26b'
 WHEEL_SHA = '6b581cf1c3fa759495eb051d1ec5be4b5cb61a4e15265db7b9d56260ea5925d0'
 PKG = 'panasonic-on-ubuntu-face-gpu'
-VERSION = '0.18.0'
+VERSION = '0.19.0'
 RUNTIME = ('libopenvino.so.2540','libopenvino_intel_gpu_plugin.so','libopenvino_onnx_frontend.so.2540',
            'libopenvino_ir_frontend.so.2540','libtbb.so.12','libtbbmalloc.so.2','libtbbbind_2_5.so.3')
 
@@ -27,7 +28,7 @@ def compile_helpers(repo, work, intel, dest):
     upstream = work/'source'
     upstream.mkdir()
     archive = work/'source.tar'
-    run('git','-C',repo,'archive','-o',archive,REV)
+    run('git','-c','core.autocrlf=false','-C',repo,'archive','-o',archive,REV)
     with tarfile.open(archive) as tar:
         tar.extractall(upstream,filter='data')
     run('git','apply',SOURCE/'facelock.patch',cwd=upstream)
@@ -108,4 +109,8 @@ Description: Oh My Panasonic local FP32 face verification with Intel graphics
             ROOT/f'dist/{PKG}_{VERSION}_amd64.deb')
 
 if __name__=='__main__':
-    main()
+    try:
+        main()
+    except (OSError, subprocess.CalledProcessError, tarfile.TarError, zipfile.BadZipFile) as error:
+        print(f'Face GPU package build failed: {error}', file=sys.stderr)
+        raise SystemExit(1)
