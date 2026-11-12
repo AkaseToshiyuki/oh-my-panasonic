@@ -124,7 +124,7 @@ export default class Panasonic extends Extension {
                 });
             } else this.stopTelemetry();
         });
-        this.dbus = Gio.DBusExportedObject.wrapJSObject(XML, {Show: () => this.show(), Hide: () => this.hide(), Open: page => {this.show(); this.page(page); this.button.menu.open();}, SetBrightness: p => this.setScreenPercent(p), GetBrightness: () => this.screenPercent() ?? -1, Inspect: () => JSON.stringify({ready: !!this.data.timestamp, page: this.route, visible: !this.hidden, errors: this.data.errors ?? {}, readout: this.percent.text, readoutItems: this.compact?.items ?? [], touchpadActive: this.touchpadIndicator?.area.visible ?? false, version: '0.23.6', sections: ['battery','network','bluetooth','audio','power','touchpad','display']})});
+        this.dbus = Gio.DBusExportedObject.wrapJSObject(XML, {Show: () => this.show(), Hide: () => this.hide(), Open: page => {this.show(); this.page(page); this.button.menu.open();}, SetBrightness: p => this.setScreenPercent(p), GetBrightness: () => this.screenPercent() ?? -1, Inspect: () => JSON.stringify({ready: !!this.data.timestamp, page: this.route, visible: !this.hidden, errors: this.data.errors ?? {}, readout: this.percent.text, readoutItems: this.compact?.items ?? [], touchpadActive: this.touchpadIndicator?.area.visible ?? false, version: '0.23.7', sections: ['battery','network','bluetooth','audio','power','touchpad','display']})});
         this.dbus.export(Gio.DBus.session, '/io/github/panasonic_on_ubuntu/Panel');
         this.owner = Gio.bus_own_name_on_connection(Gio.DBus.session, BUS, Gio.BusNameOwnerFlags.NONE, null, null);
         this.page('home'); this.watchBattery();
@@ -534,13 +534,16 @@ export default class Panasonic extends Extension {
             this.buttons(presetButtons(['adaptive','boost','system']));
             this.stat('长期功率上限',()=>fmt(this.data.power?.pl1_w,' W'));
             this.stat('短时功率上限',()=>fmt(this.data.power?.pl2_w,' W'));
+            this.stat('温控目标',()=>fmt(this.data.power?.temperature_target,' °C'));
             this.stat('EC 增强',()=>presets().boost?(this.data.power?.ec_lease?'运行中':'未启用'):'');
             this.stat('内核温度保护',()=>fmt(this.data.power?.kernel_guard_c,' °C'));
             this.text(()=>this.data.power?.error||'','pou-subtitle');
             this.stat('外设策略',()=>({follow:'随 CPU 预设',save:'省电',performance:'低延迟',system:'系统默认'}[this.data.peripherals?.requested]??''));
             this.text(()=>this.data.peripherals?.error??'');
             this.buttons([['随预设',()=>this.control('peripherals','follow')],['外设省电',()=>this.control('peripherals','save')],['低延迟',()=>this.control('peripherals','performance')],['恢复系统',()=>this.control('peripherals','system')]]);
-            this.stat('系统电源模式',()=>modes[this.data.system?.profile]??'未知');this.buttons(Object.entries(modes).map(([key,value])=>[value,()=>this.control('profile',key)]));
+            const systemPower=()=>!this.data.power?.mode||this.data.power.mode==='system';
+            this.stat('系统电源模式',()=>systemPower()?(modes[this.data.system?.profile]??''):'');
+            this.buttons(Object.entries(modes).map(([key,value])=>[value,()=>this.control('profile',key),null,systemPower]));
             this.stat('风扇模式',()=>fanPolicy(this.data));this.stat('风扇反馈',()=>this.data.power?.fan?.feedback==null?'—':`${this.data.power.fan.feedback}%`);
             const fanProfile=()=>this.data.firmware?.fan_profile!=null;
             this.buttons([['标准',()=>this.control('fan','standard'),null,fanProfile],['静音',()=>this.control('fan','quiet'),null,fanProfile],

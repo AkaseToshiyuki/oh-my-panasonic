@@ -94,8 +94,10 @@ class Controller:
             (FIRMWARE / 'fan_profile').write_text(str(base_profile))
             self.profile_owned = False
 
-    def tick(self, base_profile):
+    def tick(self, base_profile, performance=False):
         config = configuration()
+        if performance:
+            config = {**config, 'mode': 'performance'}
         mode = config['mode']
         resolved = effective_mode(mode, base_profile)
         if resolved != self.mode:

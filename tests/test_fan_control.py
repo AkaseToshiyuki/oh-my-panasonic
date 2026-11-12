@@ -18,6 +18,23 @@ class FanControlTests(unittest.TestCase):
                 fan.validate({'curve': values})
         self.assertEqual(fan.interpolate(42.5, [40, 60, 70, 80, 100]), 50)
 
+    def test_performance_policy_preserves_saved_curve_and_returns_after_exit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);config=root/'config'
+            config.write_text(json.dumps({'mode':'quiet'}));saved=config.read_bytes()
+            for name,value in {'fan_feedback_percent':20,'fan_profile':1,'package_temperature_c':40,
+                               'fan_pwm':0,'software_quiet_curve':1}.items():
+                (root/name).write_text(str(value))
+            controller=fan.Controller()
+            with patch.object(fan,'FIRMWARE',root),patch.object(fan,'CONFIG',config):
+                active=controller.tick(0,performance=True)
+                self.assertEqual(active['mode'],'performance')
+                self.assertGreaterEqual(active['requested'],52)
+                self.assertEqual(config.read_bytes(),saved)
+                resumed=controller.tick(1)
+                self.assertEqual(resumed['mode'],'quiet')
+                self.assertLess(resumed['requested'],52)
+
     def test_smoothing_hot_override_and_release(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

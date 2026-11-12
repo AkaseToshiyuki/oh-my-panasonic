@@ -494,11 +494,13 @@ class App(Adw.Application):
             self.stat(card,'当前预设',self.mode)
             self.stat(card,'长期功率上限',lambda:fmt(self.get('power','pl1_w'),' W'))
             self.stat(card,'短时功率上限',lambda:fmt(self.get('power','pl2_w'),' W'))
+            self.stat(card,'温控目标',lambda:fmt(self.get('power','temperature_target'),' °C'))
             from .power import model_presets
             presets=model_presets()
             names={'eco':'省电','balanced':'均衡','performance':'性能','adaptive':'温控性能','boost':'增强性能'}
             self.actions(card,[(f"{names[mode]} {preset['pl1']} W",lambda m=mode:self.control('cpu',m)) for mode,preset in presets.items()]+[('系统管理',lambda:self.control('cpu','system'))])
             system_card=self.card(page,'系统电源模式')
+            self.updaters.append(lambda c=system_card:c.set_visible(self.get('power','mode') in (None,'system')))
             self.stat(system_card,'当前',lambda:{'power-saver':'省电','balanced':'均衡','performance':'性能'}.get(self.get('system','profile')))
             self.actions(system_card,[(title,lambda m=mode:self.control('profile',m)) for mode,title in [('power-saver','省电'),('balanced','均衡'),('performance','性能')]])
             self.text(card,lambda:self.get('power','error') or '')

@@ -67,8 +67,9 @@ class Tray:
             self.fan_actions.append(self.item(power, label, lambda v=value: self.control('fan', v)))
         self.performance_fan = self.item(power, '性能风扇曲线', lambda: self.control('fan', 'performance'))
         self.limits = self.item(power, '动态功率限制', sensitive=False)
-        for value, label in [('eco','CPU 极致省电 6 W'),('balanced','CPU 日常均衡 12 W'),('performance','CPU 性能 20 W'),('adaptive','CPU 温控性能 · 90°C 目标'),('boost','CPU 增强性能 · 25 W'),('system','CPU 恢复系统管理')]:
-            self.item(power, label, lambda v=value: self.control('cpu', v))
+        self.cpu_actions = {}
+        for value, label in [('eco','极致省电'),('balanced','日常均衡'),('performance','性能'),('adaptive','温控性能'),('boost','增强性能'),('system','系统管理')]:
+            self.cpu_actions[value] = (self.item(power, label, lambda v=value: self.control('cpu', v)), label)
         power.append(Gtk.SeparatorMenuItem())
         optical = power
         self.optical = self.item(optical, '读取光驱…', sensitive=False)
@@ -244,13 +245,22 @@ class Tray:
         self.indicator.set_icon_full('pou-touchpad-symbolic' if values.get('pad')=='active' and icon_enabled() else 'pou-empty-symbolic',self.summary.get_label())
         self.indicator.set_label(values.get('compact',''), '')
         current = values['profile']
+        from .power import status as power_status
+        power = power_status()
+        system_managed = power.get('mode', 'system') == 'system'
         self.readout(self.profile, '系统电源', {'balanced': '均衡', 'performance': '性能', 'power-saver': '省电'}.get(current))
+        self.profile.set_visible(system_managed)
         for value, (item, label) in self.profiles.items():
             item.set_label(('✓ ' if current == value else '') + label)
             item.set_sensitive(value in values['profiles'])
+            item.set_visible(system_managed)
+        presets = power.get('presets', {})
+        for value, (item, label) in self.cpu_actions.items():
+            preset = presets.get(value)
+            item.set_visible(bool(preset) or value == 'system' and bool(presets))
+            item.set_label(label + (f" {preset['pl1']} W" if preset else ''))
         self.pad.set_label('圆形滚动：' + ('运行中' if values['pad'] == 'active' else '未启用'))
-        from .power import status as power_status
-        active_fan = power_status().get('fan', {})
+        active_fan = power.get('fan', {})
         name = {'custom':'自定义曲线','performance':'性能曲线','manual':'手动输出'}.get(active_fan.get('mode'),{0:'标准自动曲线',1:'静音自动曲线'}.get(fw['fan_profile'],''))
         feedback = active_fan.get('feedback')
         self.readout(self.fan,'风扇',' · '.join(filter(None,(name,reading(feedback,'%')))))

@@ -33,7 +33,8 @@ SR3_PRESETS = {
     'eco': dict(pl1=8, pl2=12, turbo=1, fan=1, profile='power-saver'),
     'balanced': dict(pl1=15, pl2=28, turbo=0, fan=0, profile='balanced'),
     'performance': dict(pl1=28, pl2=55, turbo=0, fan=0, profile='performance'),
-    'adaptive': dict(pl1=28, pl2=55, turbo=0, fan=0, profile='performance'),
+    'adaptive': dict(pl1=28, pl2=55, turbo=0, fan=0, profile='performance',
+                     target_c=83, cutoff_c=85, fan_policy='performance'),
 }
 
 
@@ -84,13 +85,13 @@ def temperature():
     return max(values) if values else None
 
 
-def thermal_target(current, ceiling, temp):
-    """90 C target, 94 C emergency reduction; retain silicon and thermald limits."""
-    if temp is None or temp >= 94:
+def thermal_target(current, ceiling, temp, target_c=90, cutoff_c=94):
+    """Use model-specific hysteresis while retaining silicon and thermald limits."""
+    if temp is None or temp >= cutoff_c:
         return min(6,ceiling)
-    if temp >= 90:
+    if temp >= target_c:
         return min(ceiling,max(min(6,ceiling),current-2))
-    if temp <= 86:
+    if temp <= target_c-4:
         return min(ceiling, current + 1)
     return min(current,ceiling)
 
@@ -143,6 +144,9 @@ class Controller:
         self.cool_until = 0
         self.guard_tripped = False
         self.presets = {}
+        self.temperature_target = 90
+        self.temperature_cutoff = 94
+        self.guard_short_burst = False
 
     def write(self, path, value):
         # Persist ownership before changing hardware, including a process kill
@@ -216,6 +220,9 @@ class Controller:
         files = {str(p): p.read_text().strip() for p in paths}
         profile = power_profiles.get_active()
         preset = self.presets[mode]
+        self.temperature_target = preset.get('target_c', 90)
+        self.temperature_cutoff = preset.get('cutoff_c', 94)
+        self.guard_short_burst = mode == 'adaptive' and 'cutoff_c' in preset
         if any(int(files[str(p)]) <= 0 for p in paths[:2]):
             raise RuntimeError('RAPL 功率限制未启用或不可用，未接管 CPU')
         ceiling = int(files[str(paths[0])])/1e6
@@ -233,6 +240,9 @@ class Controller:
         self.ceiling = min(preset['pl1'], ceiling)
         self.target = min(12,self.ceiling) if mode in ('adaptive','boost') else self.ceiling
         self.short_ceiling = None
+        if self.guard_short_burst:
+            self.short_ceiling = short_limit
+            short_limit = min(short_limit, self.target)
         if mode == 'boost':
             self.short_ceiling = short_limit
             fresh = measured and time.monotonic() - measured['received'] < 8
@@ -265,7 +275,8 @@ class Controller:
         temp = temperature()
         fresh = measured and time.monotonic() - measured['received'] < 8
         if self.mode in ('adaptive','boost'):
-            self.target = thermal_target(self.target, self.ceiling, temp if fresh else None)
+            self.target = thermal_target(self.target, self.ceiling, temp if fresh else None,
+                                         self.temperature_target, self.temperature_cutoff)
         elif temp is None or temp >= 94:
             self.target = min(6,self.ceiling)
             self.write(FIRMWARE / 'fan_profile', 0)
@@ -282,6 +293,7 @@ class Controller:
         desired = int(self.target*1e6)
         if actual != desired:
             self.write(path, desired)
+        allowed = False
         if self.mode == 'boost':
             active = read(FIRMWARE / 'performance_lease') == '1'
             reason = read(FIRMWARE / 'lease_reason')
@@ -313,17 +325,19 @@ class Controller:
                         self.error = ''
             elif active:
                 self.write(FIRMWARE / 'performance_lease', 0)
-            if self.short_ceiling is not None:
-                short_path = RAPL / 'constraint_1_power_limit_uw'
-                actual_short = int(read(short_path, '0'))
-                if actual_short <= 0:
-                    raise RuntimeError('短时功率限制已关闭')
-                if actual_short < int(self.last.get(str(short_path), actual_short)):
-                    self.short_ceiling = min(self.short_ceiling, actual_short / 1e6)
-                    self.baseline['files'][str(short_path)] = str(actual_short)
-                limit = self.short_ceiling if allowed else min(self.short_ceiling, self.target)
-                if actual_short != int(limit * 1e6):
-                    self.write(short_path, int(limit * 1e6))
+        if self.guard_short_burst:
+            allowed = fresh and temp is not None and temp < self.temperature_target and self.target > 6
+        if self.short_ceiling is not None:
+            short_path = RAPL / 'constraint_1_power_limit_uw'
+            actual_short = int(read(short_path, '0'))
+            if actual_short <= 0:
+                raise RuntimeError('短时功率限制已关闭')
+            if actual_short < int(self.last.get(str(short_path), actual_short)):
+                self.short_ceiling = min(self.short_ceiling, actual_short / 1e6)
+                self.baseline['files'][str(short_path)] = str(actual_short)
+            limit = self.short_ceiling if allowed else min(self.short_ceiling, self.target)
+            if actual_short != int(limit * 1e6):
+                self.write(short_path, int(limit * 1e6))
         atomic(RUNTIME / 'baseline.json', {**self.baseline, 'last': self.last}, 0o600)
 
 
@@ -493,7 +507,7 @@ def run():
                     retry_at = time.monotonic() + 5
                     log.warning('restore deferred: %s', restore_error)
             fresh = measured and time.monotonic() - measured['received'] < 8
-            state = dict(timestamp=time.time(), mode=controller.mode, error=controller.error or ('' if fresh else '正在恢复硬件采样，暂不显示过期读数'), sample=measured if fresh else None, history=history, source='Linux turbostat · RAPL / APERF / MPERF', target_w=controller.target if controller.mode != 'system' else None, temperature_target=90 if controller.mode in ('adaptive','boost') else None)
+            state = dict(timestamp=time.time(), mode=controller.mode, error=controller.error or ('' if fresh else '正在恢复硬件采样，暂不显示过期读数'), sample=measured if fresh else None, history=history, source='Linux turbostat · RAPL / APERF / MPERF', target_w=controller.target if controller.mode != 'system' else None, temperature_target=controller.temperature_target if controller.mode in ('adaptive','boost') else None)
             state['ec_lease'] = read(FIRMWARE / 'performance_lease') == '1'
             state['lease_reason'] = read(FIRMWARE / 'lease_reason')
             state['kernel_guard_c'] = int(read(Path('/sys/module/pou_firmware/parameters/lease_cutoff_c'),'0')) or None
@@ -504,7 +518,8 @@ def run():
             state['pl2_w'] = int(read(RAPL / 'constraint_1_power_limit_uw', '0')) / 1e6 or None
             state['no_turbo'] = read(PSTATE / 'no_turbo')
             try:
-                state['fan'] = fan.tick(base_fan())
+                performance_fan = controller.presets.get(controller.mode, {}).get('fan_policy') == 'performance'
+                state['fan'] = fan.tick(base_fan(), performance=performance_fan)
             except (OSError, ValueError, TypeError) as exc:
                 try:
                     fan.release()
