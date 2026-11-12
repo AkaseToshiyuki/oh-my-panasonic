@@ -3,6 +3,9 @@ set -e
 if [ "$1" = configure ]; then
     systemd-sysusers /usr/lib/sysusers.d/pou-input.conf
     systemctl daemon-reload
+    systemctl stop pou-power.service pou-battery.service pou-optical.service || true
+    /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.optical import supported,switch; switch("on") if supported() else None'
+    /usr/bin/python3 -I -m panasonic_on_ubuntu.hardware install
     udevadm control --reload-rules || true
     gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
     systemctl enable --now pou-face-broker.socket

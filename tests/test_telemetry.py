@@ -24,13 +24,17 @@ class CollectionTests(unittest.TestCase):
 
     def test_cpu_page_never_probes_unrelated_devices_or_history(self):
         with patch.object(telemetry, 'power_status', return_value={'mode':'system'}) as power, \
+                patch.object(telemetry, 'system', return_value={'profile':'balanced'}), \
                 patch.object(telemetry, 'peripheral_status', return_value={}), \
+                patch('panasonic_on_ubuntu.ssd_power.status', return_value={'available':True}), \
+                patch.object(telemetry, 'optical', return_value={'supported':False}), \
                 patch.multiple(telemetry, snapshot=unittest.mock.DEFAULT, network=unittest.mock.DEFAULT,
                                audio=unittest.mock.DEFAULT, firmware_status=unittest.mock.DEFAULT,
-                               history=unittest.mock.DEFAULT, optical=unittest.mock.DEFAULT) as unused:
+                               history=unittest.mock.DEFAULT) as unused:
             value = telemetry.Collector().collect('cpu')
         power.assert_called_once()
-        self.assertEqual(set(value), {'timestamp','scope','errors','power','peripherals'})
+        self.assertEqual(set(value), {'timestamp','scope','errors','power','peripherals','system','ssd_power','optical'})
+        self.assertTrue(value['ssd_power']['available'])
         for function in unused.values():function.assert_not_called()
 
     def test_history_is_bounded_cache_but_live_battery_is_always_read(self):

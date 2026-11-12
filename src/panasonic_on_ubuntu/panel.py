@@ -50,6 +50,18 @@ def show(autostart=False):
                 subprocess.run(['systemctl', '--user', 'stop', 'pou-tray.service'], timeout=5, check=False)
                 return
             time.sleep(.2)
+        subprocess.run(['systemctl', '--user', 'stop', 'pou-tray.service'], timeout=5, check=False)
+        if not autostart:
+            try:
+                Gio.bus_get_sync(Gio.BusType.SESSION, None).call_sync(
+                    'org.freedesktop.Notifications', '/org/freedesktop/Notifications',
+                    'org.freedesktop.Notifications', 'Notify',
+                    GLib.Variant('(susssasa{sv}i)', ('Oh My Panasonic', 0, 'pou-symbolic',
+                        '状态栏已安装', '保存工作后注销并重新登录，即可启用状态栏。', [], {}, 8000)),
+                    None, Gio.DBusCallFlags.NONE, 1500, None)
+            except GLib.Error:
+                pass
+        return
     # A first installation may need a GNOME login before Shell discovers it.
     subprocess.run(['systemctl', '--user', 'start', 'pou-tray.service'], check=True, timeout=10)
 

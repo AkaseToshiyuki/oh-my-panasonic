@@ -13,7 +13,6 @@ python3 tools/build_pose_helper.py ../facelock
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 tools/check_release.py
 python3 tools/build_deb.py
-python3 tools/build_firmware_deb.py
 ```
 
 Facelock 固定于提交 `352bbbcb0f8f61cc21e36a1f038442e94fa6e26b`，构建器从该提交的干净归档编译。主包构建器自动编译 WheelPad。Cargo 使用锁文件；首次构建需要下载依赖。构建器自动收集实际使用的 Rust 依赖许可证，缺少授权文本时停止，并将编译机的私人路径替换为通用构建路径。
@@ -24,11 +23,10 @@ Facelock 固定于提交 `352bbbcb0f8f61cc21e36a1f038442e94fa6e26b`，构建器�
 
 | 文件 | 用途 |
 | --- | --- |
-| `oh-my-panasonic_0.20.2_amd64.deb` | 主程序 |
-| `panasonic-on-ubuntu_0.20.2_all.deb` | 保留旧包升级和可选组件依赖的空兼容包 |
-| `panasonic-on-ubuntu-firmware-dkms_0.7.2_all.deb` | CF-SV7 专用模块源码；安装时由 DKMS 编译 |
+| `oh-my-panasonic_0.23.0_amd64.deb` | 所有机型共用的主程序与硬件模块源码 |
+| `panasonic-on-ubuntu_0.23.0_all.deb` | 保留旧包升级和可选组件依赖的空兼容包 |
 
-固件包的名称为历史兼容标识，不包含 Panasonic 专有固件。其模块版本仍为 0.7.1。需要匹配当前内核的头文件，Secure Boot 环境还需要模块签名。
+主包不包含 Panasonic 专有固件。安装器根据 DMI 型号、SKU 和 BIOS 自动选择模块；SV7 后端内部版本为 0.8.0，SR3 后端为 0.2.0，两者共享电池模块源码。只有匹配的后端注册到 DKMS 并自动加载，内核升级时由 DKMS 重建。安装需匹配当前内核的头文件，Secure Boot 环境还需要模块签名。
 
 ## 可选人脸与核显组件
 
@@ -54,11 +52,11 @@ PYTHONPATH=src GSK_RENDERER=cairo GDK_BACKEND=x11 OMP_PRIVATE_BUS_TEST=1 xvfb-ru
 安装后可逐文件比较发布包：
 
 ```sh
-python3 tools/verify_installed.py dist/oh-my-panasonic_0.20.2_amd64.deb
+python3 tools/verify_installed.py dist/oh-my-panasonic_0.23.0_amd64.deb
 ```
 
 ## 发布
 
 只发布通过检查的 Git 提交及 `dist/` 中本版本的指定包；不要归档整个工作区。用 `git archive` 导出源码，附带 SHA-256 校验文件。检查源码归档和 deb 内不存在日志、研究文件、个人设置、模型或凭据。
 
-首次公开发布定位为 CF-SV7 优先的测试版。发布到托管平台后应启用私有漏洞报告，并在仓库说明中设置真实的支持入口。
+当前发布定位为 CF-SV7 / CF-SR3 的统一测试版。发布到托管平台后应启用私有漏洞报告，并在仓库说明中设置真实的支持入口。

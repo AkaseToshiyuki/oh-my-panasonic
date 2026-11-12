@@ -49,6 +49,7 @@ class ServiceTest(unittest.TestCase):
         self.assertTrue(all(x['phase']=='holding' and x['driver_mode']==1 and not x['error'] for x in observed))
         self.assertEqual(state['request_id'],'test')
         self.assertEqual(mode,'0')
+        self.assertTrue(all(not x['sleep_hold'] and not x['poweroff_hold'] for x in observed))
 
     def test_permitted_charge_is_not_presented_as_actual_charging(self):
         for charging, label in [(False, '等待充电'), (True, '充电至保养上限')]:

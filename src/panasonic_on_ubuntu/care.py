@@ -118,7 +118,7 @@ class Policy:
             self.phase = 'battery'; return 0
         if 'ac_since' not in self.state or now < self.state['ac_since']: self.state['ac_since'] = now
         if 'last_maintenance' not in self.state: self.state['last_maintenance'] = now
-        near_full = ('松下 CF-SV7 满充后会等电量降至 94% 或以下才重新充电。'
+        near_full = ('满充后等待电量降至 94% 或以下再重新充电。'
                      if data['status']=='Not charging' and 95 <= data['capacity'] < 100 else '')
         if config['mode'] == 'system':
             self.reason = near_full
@@ -341,8 +341,8 @@ def run():
                     'departure_prediction':data.get('departure_prediction'),
                     'last_maintenance':policy.state.get('last_maintenance'),
                     'next_maintenance':policy.state.get('last_maintenance',now)+config['maintenance_days']*86400 if config['maintenance_days'] else None,
-                    'sleep_hold':offline_requested(config,policy.state,now,'sleep_hold'),
-                    'poweroff_hold':offline_requested(config,policy.state,now,'poweroff_hold')}
+                    'sleep_hold':bool(int(read(FIRMWARE/'offline_capabilities') or 0) & 1) and offline_requested(config,policy.state,now,'sleep_hold'),
+                    'poweroff_hold':bool(int(read(FIRMWARE/'offline_capabilities') or 0) & 2) and offline_requested(config,policy.state,now,'poweroff_hold')}
             session.checkpoint(policy.state, now, bool(data) and not error)
             record_maintenance(policy.state, output)
             serialized=json.dumps(policy.state,sort_keys=True)

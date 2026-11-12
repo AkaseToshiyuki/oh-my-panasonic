@@ -39,5 +39,21 @@ class FanControlTests(unittest.TestCase):
                 self.assertFalse(fan.Controller().tick(0)['available'])
                 self.assertEqual(list(root.iterdir()),[])
 
+    def test_sr3_quiet_renews_temperature_curve_and_releases_to_standard(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);config=root/'config'
+            config.write_text(json.dumps({'mode':'follow'}))
+            for name,value in {'fan_feedback_percent':20,'fan_profile':1,'package_temperature_c':35,
+                               'fan_pwm':0,'software_quiet_curve':1}.items():
+                (root/name).write_text(str(value))
+            controller=fan.Controller()
+            with patch.object(fan,'FIRMWARE',root),patch.object(fan,'CONFIG',config):
+                self.assertEqual(controller.tick(1)['requested'],20)
+                (root/'package_temperature_c').write_text('84')
+                self.assertEqual(controller.tick(1)['requested'],100)
+                controller.tick(0)
+                self.assertEqual((root/'fan_pwm').read_text(),'0')
+                self.assertEqual((root/'fan_profile').read_text(),'0')
+
 if __name__ == '__main__':
     unittest.main()

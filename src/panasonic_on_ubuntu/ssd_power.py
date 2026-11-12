@@ -15,7 +15,10 @@ ROOT = Path('/run/panasonic-on-ubuntu')
 CONFIG = Path('/etc/panasonic-on-ubuntu/ssd-power.json')
 BASELINE = ROOT/'ssd-power-baseline.json'
 MODES = ('follow', 'system', 'save', 'balanced', 'performance')
-VERIFIED = ('ZHITAI TiPlus5000 1TB', 'ZTA10666')
+VERIFIED = {
+    ('ZHITAI TiPlus5000 1TB', 'ZTA10666'): (6.5, 5.8, 3.6),
+    ('SilverMake 2268XT2 B58R 1TB', 'X0430M00'): (4.5, 2.4, .6),
+}
 ADMIN = struct.Struct('<BBHIIIQQ10I')
 ADMIN_IOCTL = 0xc0484e41
 
@@ -50,14 +53,15 @@ def identify(data):
     if len(data) != 4096: raise ValueError('NVMe 设备信息长度不符')
     model = data[24:64].decode('ascii', errors='replace').strip()
     firmware = data[64:72].decode('ascii', errors='replace').strip()
-    if (model, firmware) != VERIFIED: raise ValueError('此 SSD 固件尚未验证电源控制')
+    expected = VERIFIED.get((model, firmware))
+    if expected is None: raise ValueError('此 SSD 固件尚未验证电源控制')
     states = []
     for index in range(min(32, data[263]+1)):
         offset = 2048+32*index
         maximum, flags = struct.unpack_from('<H', data, offset)[0], data[offset+3]
         if not flags & 2:
             states.append({'state': index, 'maximum_w': maximum * (.0001 if flags & 1 else .01)})
-    if [s['state'] for s in states] != [0,1,2] or [s['maximum_w'] for s in states] != [6.5,5.8,3.6]:
+    if [s['state'] for s in states] != [0,1,2] or any(abs(s['maximum_w']-w) > 1e-6 for s,w in zip(states,expected)):
         raise ValueError('SSD 电源档位与已验证型号不符')
     return dict(model=model, firmware=firmware, states=states,
                 fingerprint=hashlib.sha256(data[4:72]).hexdigest())

@@ -2,12 +2,11 @@
 from pathlib import Path
 import sys
 from evdev import InputDevice
+from panasonic_on_ubuntu.touchpad import validate
 try:
-    assert Path('/sys/class/dmi/id/product_name').read_text().strip() == 'CFSV7-3L'
     d = InputDevice('/dev/input/pou-touchpad')
     try:
-        assert d.name == 'SynPS/2 Synaptics TouchPad'
-        assert (d.info.bustype, d.info.vendor, d.info.product) == (0x11, 2, 7)
+        validate(d)
     finally:
         d.close()
 except Exception as exc:

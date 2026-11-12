@@ -1,4 +1,4 @@
-"""Local colour viewfinder and IR enrollment for the SV7."""
+"""Local colour viewfinder and IR enrollment."""
 import json
 import math
 from pathlib import Path
@@ -12,8 +12,9 @@ gi.require_version('Gdk', '4.0')
 from gi.repository import Gdk, Gio, GLib, Gtk
 
 
-RGB = Path('/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6:1.0-video-index0')
-PIPELINE = (f'v4l2src device={RGB} ! video/x-raw,width=320,height=240 ! '
+def preview_pipeline():
+    from .camera import colour_camera
+    return (f'v4l2src device={colour_camera()} ! video/x-raw,width=320,height=240 ! '
             'videoflip method=horizontal-flip ! videoconvert ! video/x-raw,format=RGB ! '
             'appsink name=view max-buffers=1 drop=true sync=false')
 
@@ -95,7 +96,7 @@ class Enrollment:
             from gi.repository import Gst
             self.gst = Gst
             Gst.init(None)
-            self.pipeline = Gst.parse_launch(PIPELINE)
+            self.pipeline = Gst.parse_launch(preview_pipeline())
             self.sink = self.pipeline.get_by_name('view')
             if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
                 raise RuntimeError('camera')

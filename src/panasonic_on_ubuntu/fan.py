@@ -1,4 +1,4 @@
-"""Temperature-based fan control using the CF-SV7 driver's expiring lease."""
+"""Temperature-based fan control using the selected driver's expiring lease."""
 import json
 import math
 from pathlib import Path
@@ -8,6 +8,7 @@ CONFIG = Path('/etc/panasonic-on-ubuntu/fan-control.json')
 FIRMWARE = Path('/sys/devices/platform/pou-firmware')
 TEMPS = (35, 50, 65, 75, 85)
 PERFORMANCE = (52, 64, 80, 92, 100)
+QUIET = (20, 30, 50, 76, 100)
 DEFAULT = dict(mode='follow', percent=60, response=6, curve=[40, 50, 66, 82, 100])
 MODES = ('follow', 'standard', 'quiet', 'performance', 'custom', 'manual')
 
@@ -74,14 +75,19 @@ class Controller:
         except (OSError, ValueError):
             self.restore(base_profile)
             return state
-        if mode == 'follow':
+        try:
+            software_quiet = (FIRMWARE / 'software_quiet_curve').read_text().strip() == '1'
+        except OSError:
+            software_quiet = False
+        quiet_curve = software_quiet and (mode == 'quiet' or mode == 'follow' and base_profile == 1)
+        if mode == 'follow' and not quiet_curve:
             self.restore(base_profile)
             return state
-        profile = 1 if mode == 'quiet' else 0
+        profile = 1 if mode == 'quiet' or quiet_curve else 0
         if int((FIRMWARE / 'fan_profile').read_text()) != profile:
             (FIRMWARE / 'fan_profile').write_text(str(profile))
         self.profile_owned = True
-        if mode in ('quiet', 'standard'):
+        if mode in ('quiet', 'standard') and not quiet_curve:
             self.release()
             return state
         temp = int((FIRMWARE / 'package_temperature_c').read_text())
@@ -91,7 +97,7 @@ class Controller:
         else:
             self.filtered += (temp - self.filtered) * (1 - math.exp(-(now - self.stamp) / config['response']))
         self.stamp = now
-        curve = PERFORMANCE if mode == 'performance' else config['curve']
+        curve = QUIET if quiet_curve else PERFORMANCE if mode == 'performance' else config['curve']
         level = config['percent'] if mode == 'manual' else interpolate(self.filtered, curve)
         if temp >= 82:
             level = 100

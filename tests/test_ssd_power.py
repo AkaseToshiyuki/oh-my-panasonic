@@ -78,6 +78,17 @@ class SSDTests(unittest.TestCase):
 
 
 class DriverTests(unittest.TestCase):
+    def test_silvermake_table_uses_100_microwatt_units(self):
+        raw=bytearray(identify_data())
+        raw[24:64]=b'SilverMake 2268XT2 B58R 1TB'.ljust(40)
+        raw[64:72]=b'X0430M00'
+        for index,power in enumerate((45000,24000,6000)):
+            struct.pack_into('<H',raw,2048+32*index,power)
+            raw[2051+32*index]=1
+        self.assertEqual([round(p['maximum_w'],2) for p in ssd.identify(raw)['states']],[4.5,2.4,.6])
+        raw[64]=ord('Y')
+        with self.assertRaises(ValueError):ssd.identify(raw)
+
     def test_identity_and_table_are_allowlisted(self):
         value=ssd.identify(identify_data())
         self.assertEqual([p['maximum_w'] for p in value['states']],[6.5,5.8,3.6])

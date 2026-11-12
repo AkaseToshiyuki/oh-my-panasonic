@@ -11,6 +11,7 @@ case "$1" in
         systemctl disable --now pou-optical.service || true
         systemctl disable --now pou-power.service || true
         /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.optical import supported,switch; switch("on") if supported() else None' || true
+        /usr/bin/python3 -I -m panasonic_on_ubuntu.hardware remove
         systemctl disable --now pou-wheelpad.service || true
         for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {print $1}'); do
             username=$(getent passwd "$uid" | cut -d: -f1)

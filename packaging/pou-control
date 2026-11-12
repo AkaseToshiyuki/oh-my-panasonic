@@ -26,23 +26,10 @@ def atomic(name, text):
     temp.replace(target)
 
 def configure(sensitivity, natural):
-    if sensitivity not in range(-2, 3) or natural not in (0, 1):
-        raise ValueError('Invalid touchpad setting')
+    from panasonic_on_ubuntu.touchpad import configuration
+    text = configuration(sensitivity, natural)
     atomic('wheelpad.json', json.dumps({'sensitivity': sensitivity, 'natural': bool(natural)}))
-    # SV7 ABS ranges 1210..5780 / 1250..4680; normalized radius is 2285.
-    atomic('wheelpad.toml', f'''device_name_regex = "^SynPS/2 Synaptics TouchPad$"
-[scroll]
-enable = true
-reverse_vertical = {str(bool(natural)).lower()}
-horizontal_enable = false
-sensitivity = {sensitivity}
-detect_area_width = 0
-detect_area_radius = 1830.0
-coordinate_y_scale = 1.332361516
-minimum_rotation_radius = 500.0
-[log]
-level = "info"
-''')
+    atomic('wheelpad.toml', text)
 
 def main():
     if os.geteuid() != 0:
@@ -251,8 +238,10 @@ def main():
             raise RuntimeError('Power profile readback mismatch')
         return
     # Disabling is always possible, including after an unsupported hardware move.
-    if args[0] != 'disable' and Path('/sys/class/dmi/id/product_name').read_text().strip() != 'CFSV7-3L':
-        raise ValueError('This WheelPad profile is validated only for CFSV7-3L')
+    if args[0] in ('enable', 'configure'):
+        from panasonic_on_ubuntu.touchpad import PROFILES, model
+        if model() not in PROFILES:
+            raise ValueError('本机尚不支持圆形滚动')
     BASE.mkdir(mode=0o755, exist_ok=True)
     with open('/run/lock/pou-control.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -288,6 +277,7 @@ def main():
             run('/usr/bin/udevadm', 'settle', '--timeout=10')
             try:
                 run('/usr/bin/systemctl', 'enable', '--now', 'pou-wheelpad.service')
+                run('/usr/bin/systemctl', 'is-active', '--quiet', 'pou-wheelpad.service')
             except Exception:
                 (BASE / 'enabled').unlink(missing_ok=True)
                 run('/usr/bin/systemctl', 'disable', '--now', 'pou-wheelpad.service')

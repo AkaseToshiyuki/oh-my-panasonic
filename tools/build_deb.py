@@ -9,7 +9,7 @@ from collect_rust_licenses import collect
 from rust_build import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.22.1'
+VERSION = '0.23.0'
 
 def build():
     wheelpad = ROOT/'vendor/letsnote-wheelpad'
@@ -39,8 +39,14 @@ def build():
         (stage/'usr/libexec/pou-face-session').chmod(0o755)
         for name in ['pou-control', 'pou-adjust', 'pou-input-check', 'pou-face-manage', 'pou-face-check', 'pou-face-authorize']:
             put('packaging/' + name, 'usr/libexec/' + name, 0o755)
-        for name in ['pou-wheelpad.service', 'pou-power.service', 'pou-optical.service', 'pou-battery.service', 'pou-face-broker.socket', 'pou-face-broker@.service']:
+        for name in ['pou-wheelpad.service', 'pou-power.service', 'pou-optical.service', 'pou-battery.service', 'pou-face-broker.socket', 'pou-face-broker@.service', 'pou-firmware-restore.service']:
             put('packaging/' + name, 'usr/lib/systemd/system/' + name)
+        for name in ('pou_firmware.c', 'pou_fan_control.h', 'pou_battery.c', 'dkms.conf', 'Makefile', 'COPYING'):
+            put('kernel/' + name, 'usr/src/pou-firmware-0.8.0/' + name)
+        for name in ('pou_sr3_fan.c', 'dkms.conf', 'Makefile'):
+            put('kernel/sr3/' + name, 'usr/src/pou-sr3-fan-0.2.0/' + name)
+        for name in ('COPYING', 'pou_battery.c'):
+            put('kernel/' + name, 'usr/src/pou-sr3-fan-0.2.0/' + name)
         for name in ['pou-monitor.service', 'pou-monitor.timer', 'pou-tray.service']:
             put('packaging/' + name, 'usr/lib/systemd/user/' + name)
         put('packaging/71-pou-input.rules', 'usr/lib/udev/rules.d/71-pou-input.rules')
@@ -83,17 +89,17 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: AkaseToshiyuki <51808852+AkaseToshiyuki@users.noreply.github.com>
-Depends: python3 (>= 3.10), gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, python3-gi, python3-gi-cairo, python3-evdev, gir1.2-gtk-4.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gir1.2-adw-1, gir1.2-nm-1.0, pulseaudio-utils, power-profiles-daemon, upower, polkitd, pkexec, systemd, udev, libsystemd0, libc6 (>= 2.39), libgcc-s1, libtss2-esys-3.0.2-0t64, libtss2-mu-4.0.1-0t64, libtss2-tctildr0t64
-Recommends: network-manager, wireplumber, bluez, gnome-control-center, linux-tools-generic, iw
-Suggests: panasonic-on-ubuntu-firmware-dkms, facelock, panasonic-on-ubuntu-face-gpu
-Conflicts: letsnote-wheelpad
-Replaces: panasonic-on-ubuntu (<< 0.20.0)
+Depends: dkms (>= 3.0), python3 (>= 3.10), gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, python3-gi, python3-gi-cairo, python3-evdev, gir1.2-gtk-4.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gir1.2-adw-1, gir1.2-nm-1.0, pulseaudio-utils, power-profiles-daemon, upower, polkitd, pkexec, systemd, udev, libsystemd0, libc6 (>= 2.39), libgcc-s1, libtss2-esys-3.0.2-0t64, libtss2-mu-4.0.1-0t64, libtss2-tctildr0t64
+Recommends: network-manager, wireplumber, bluez, gnome-control-center, linux-tools-generic, iw, linux-headers-generic
+Suggests: facelock, panasonic-on-ubuntu-face-gpu
+Conflicts: letsnote-wheelpad, panasonic-on-ubuntu-firmware-dkms, oh-my-panasonic-sr3-dkms
+Replaces: panasonic-on-ubuntu (<< 0.20.0), panasonic-on-ubuntu-firmware-dkms, oh-my-panasonic-sr3-dkms
 Description: Oh My Panasonic laptop control center
  Card dashboard, native GNOME controls, hardware-counter monitoring,
- guarded CPU power presets, optical power and a CF-SV7 WheelPad backend.
+ guarded CPU power presets, optical power and CF-SV7 / CF-SR3 WheelPad backends.
  Model-scoped charge limits and maintenance use an expiring kernel lease.
 ''')
-        for name in ['postinst', 'prerm', 'postrm']:
+        for name in ['preinst', 'postinst', 'prerm', 'postrm']:
             put('packaging/' + name, 'DEBIAN/' + name, 0o755)
         write('DEBIAN/conffiles', '/etc/xdg/autostart/pou-tray.desktop\n')
         finalize(stage)

@@ -160,7 +160,7 @@ SCOPES = {
     'home': ('battery', 'care', 'power', 'firmware', 'network', 'bluetooth', 'audio', 'system', 'brightness'),
     'overview': ('battery', 'power', 'network', 'system', 'hardware'),
     'battery': ('battery', 'care'),
-    'cpu': ('power', 'peripherals'),
+    'cpu': ('power', 'peripherals', 'system', 'ssd_power', 'optical'),
     'power': ('power', 'system', 'firmware', 'peripherals', 'ssd_power', 'optical'),
     'fan': ('power', 'firmware'),
     'network': ('network', 'peripherals'),

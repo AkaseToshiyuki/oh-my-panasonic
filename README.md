@@ -2,9 +2,9 @@
 
 Panasonic Let's Note 的 Ubuntu 控制中心，提供电池保养、圆形触控板、电源策略、硬件监控和 GNOME 常驻菜单。
 
-**0.22.1 · 测试版 · Ubuntu 26.04 amd64 / GNOME 50**
+**0.23.0 · 测试版 · Ubuntu 26.04 amd64 / GNOME 50**
 
-主要支持 **CF-SV7 / CFSV7-3L、BIOS V3.11L22**。其他机型可使用系统提供的通用控制；机型专用硬件功能仅在白名单设备上启用。本项目由社区独立开发，与 Panasonic 官方无隶属关系。
+支持 **CF-SV7 / CFSV7-3L、BIOS V3.11L22** 与 **CF-SR3 / CFSR3-1、BIOS V1.00L12**。不同机型的功能范围见硬件兼容性。其他机型可使用系统提供的通用控制；机型专用硬件功能仅在匹配的设备上启用。本项目由社区独立开发，与 Panasonic 官方无隶属关系。
 
 ## 功能
 
@@ -20,18 +20,15 @@ Panasonic Let's Note 的 Ubuntu 控制中心，提供电池保养、圆形触控
 下载同一版本的主包和兼容包，在下载目录运行：
 
 ```sh
-sudo apt install ./oh-my-panasonic_0.22.1_amd64.deb ./panasonic-on-ubuntu_0.22.1_all.deb
+sudo apt install ./oh-my-panasonic_0.23.0_amd64.deb ./panasonic-on-ubuntu_0.23.0_all.deb
 pou gui
 ```
 
-CF-SV7 的 EC 电池、风扇和光驱控制还需要可选硬件模块包：
+所有机型使用同一个主包、版本和界面。主包包含硬件模块源码，安装时自动识别型号、SKU 和 BIOS，只编译并加载匹配的模块。升级时由 APT 替换旧独立硬件包，保留设置；无需自行选择机型包。
 
-```sh
-sudo apt install dkms linux-headers-$(uname -r)
-sudo apt install ./panasonic-on-ubuntu-firmware-dkms_0.7.2_all.deb
-```
+需要当前内核的头文件；自定义内核请先安装匹配的 headers。启用 Secure Boot 时，请按 Ubuntu 提示完成模块签名密钥注册。状态栏扩展首次安装后需要重新登录 GNOME。
 
-启用 Secure Boot 时，请按 Ubuntu 提示完成模块签名密钥注册。模块只在匹配的设备上提供控制。状态栏扩展安装后需要重新登录 GNOME。
+面板按实际接口显示功能。SV7 与 SR3 共用电池保养、手动风扇曲线和 SSD 节能控制；睡眠、关机期间的限充支持范围见硬件兼容性。
 
 人脸识别及核显加速为独立可选组件，需要兼容的 Facelock、红外摄像头和自行获得使用许可的模型。发布包不包含模型、录入数据或已启用的认证配置。
 

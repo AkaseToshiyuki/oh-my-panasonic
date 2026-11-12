@@ -1,11 +1,13 @@
 [Unit]
 Description=Restore saved Oh My Panasonic firmware fan curve
-After=systemd-modules-load.service
+After=systemd-modules-load.service thermald.service
+PartOf=thermald.service
 ConditionPathExists=/sys/devices/platform/pou-firmware/fan_profile
 ConditionPathExists=/etc/panasonic-on-ubuntu/fan.json
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/libexec/pou-control fan-restore
 
 [Install]

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Fixed SV7 battery commands.
+/* Fixed, model-validated battery commands.
  * No arbitrary EC access. Userspace must renew a 15-second kernel lease.
  * mode: 0 automatic, 1 AC without charging, 2 battery while AC is connected. */
 #include <linux/acpi.h>
@@ -24,7 +24,8 @@ static const char *reason = "automatic";
 static unsigned int armed_transition;
 static unsigned long arm_deadline;
 static bool offline_held;
-#define OFFLINE_CAPS 3  /* bit 0: deep suspend, bit 1: complete power-off */
+static unsigned int offline_caps; /* bit 0: deep suspend, bit 1: complete power-off */
+static const char *ec_command;
 
 /* Called with battery_lock held. The only caller-controlled values are our
  * fixed command constants. EC88 delegates to serialized EC87/EC86, sharing
@@ -37,7 +38,7 @@ static int battery_command(u8 subcommand, u8 arg0, u8 arg1, u8 *result_byte)
     unsigned long long result;
     int i;
     for (i = 0; i < 4; i++) { args[i].type = ACPI_TYPE_INTEGER; args[i].integer.value = values[i]; }
-    if (ACPI_FAILURE(acpi_evaluate_integer(NULL, "\\_SB.PCI0.LPCB.EC0.EC88", &list, &result)))
+    if (ACPI_FAILURE(acpi_evaluate_integer(NULL, (char *)ec_command, &list, &result)))
         return -EIO;
     if (result > U32_MAX || (result & 0xff)) return -EIO;
     *result_byte = (result >> 8) & 0xff;
@@ -199,7 +200,7 @@ static ssize_t interface_version_show(struct device *dev, struct device_attribut
 static DEVICE_ATTR_RO(interface_version);
 static ssize_t offline_capabilities_show(struct device *dev, struct device_attribute *a, char *buf)
 {
-    return sysfs_emit(buf, "%u\n", OFFLINE_CAPS);
+    return sysfs_emit(buf, "%u\n", offline_caps);
 }
 static DEVICE_ATTR_RO(offline_capabilities);
 static ssize_t arm_transition_store(struct device *dev, struct device_attribute *a,
@@ -207,7 +208,7 @@ static ssize_t arm_transition_store(struct device *dev, struct device_attribute 
 {
     unsigned int value;
     int err = kstrtouint(buf, 10, &value);
-    if (err || value > 2 || (value && !(value & OFFLINE_CAPS)))
+    if (err || value > 2 || (value && !(value & offline_caps)))
         return -EINVAL;
     mutex_lock(&battery_lock);
     if (unloading || blocked) {
@@ -291,8 +292,15 @@ static int __init battery_init(void)
 {
     int error;
     u8 actual;
-    if (!dmi_match(DMI_PRODUCT_NAME,"CFSV7-3L") || !dmi_match(DMI_BIOS_VERSION,"V3.11L22") ||
-        !dmi_match(DMI_PRODUCT_SKU,"CF-SV7HD9VS")) return -ENODEV;
+    if (dmi_match(DMI_PRODUCT_NAME,"CFSV7-3L") && dmi_match(DMI_BIOS_VERSION,"V3.11L22") &&
+        dmi_match(DMI_PRODUCT_SKU,"CF-SV7HD9VS")) {
+        ec_command = "\\_SB.PCI0.LPCB.EC0.EC88";
+        offline_caps = 3;
+    } else if (dmi_match(DMI_PRODUCT_NAME,"CFSR3-1") && dmi_match(DMI_BIOS_VERSION,"V1.00L12") &&
+               dmi_match(DMI_PRODUCT_SKU,"CF-SR3SKAKS")) {
+        ec_command = "\\_SB.PC00.LPCB.EC0.EC88";
+        offline_caps = 0;
+    } else return -ENODEV;
     mutex_lock(&battery_lock);
     error = ac_state(&actual);
     if (!error && actual != 0 && actual != 0x41) error = -EOPNOTSUPP;
@@ -334,5 +342,5 @@ static void __exit battery_exit(void)
 module_init(battery_init); module_exit(battery_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AkaseToshiyuki");
-MODULE_VERSION("0.7.1");
-MODULE_DESCRIPTION("CF-SV7 fixed battery controls with expiring kernel lease");
+MODULE_VERSION("0.8.0");
+MODULE_DESCRIPTION("Validated Panasonic battery controls with expiring kernel lease");

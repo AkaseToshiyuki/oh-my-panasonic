@@ -13,6 +13,7 @@ if [ "$1" = purge ]; then
     rm -f /var/lib/panasonic-on-ubuntu/battery-care.json
     rm -f /var/lib/panasonic-on-ubuntu/charging-habits.json
     rm -f /etc/panasonic-on-ubuntu/fan-control.json
+    rm -f /etc/panasonic-on-ubuntu/fan.json
     rm -f /etc/panasonic-on-ubuntu/io-limit.json
     rm -f /etc/panasonic-on-ubuntu/ssd-power.json
     rm -rf -- /var/lib/panasonic-on-ubuntu/face-unlock /var/lib/panasonic-on-ubuntu/face-authorize /var/lib/panasonic-on-ubuntu/supplemented

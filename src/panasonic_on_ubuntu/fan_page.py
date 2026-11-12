@@ -84,7 +84,10 @@ def build(app, page):
                       ('风扇反馈',lambda: f"{data()['feedback']}%" if data().get('feedback') is not None else '—'),
                       ('转速',lambda: f"{app.get('firmware','fan_rpm')} RPM" if app.get('firmware','fan_rpm') is not None else '未知')])
     modes=app.card(page,'风扇模式')
-    app.stat(modes,'当前',lambda: LABELS.get(data().get('mode'),{0:'标准',1:'静音'}.get(app.get('firmware','fan_profile'),'—')))
+    def current_mode():
+        native = {0:'标准',1:'静音'}.get(app.get('firmware','fan_profile'),'—')
+        return LABELS.get(data().get('mode'),native) if data().get('available') else native
+    app.stat(modes,'当前',current_mode)
     app.actions(modes,[('标准',lambda:app.control('fan','standard')),('静音',lambda:app.control('fan','quiet')),
                        ('恢复预设',lambda:app.control('fan','restore'))])
     advanced=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10)
@@ -111,6 +114,7 @@ def build(app, page):
         d=data()
         available=bool(d.get('available'))
         mode=d.get('mode')
+        modes.set_visible(available or app.get('firmware','fan_profile') is not None)
         advanced.set_visible(available)
         manual.set_visible(available and mode=='manual')
         custom.set_visible(available and mode in ('performance','custom'))

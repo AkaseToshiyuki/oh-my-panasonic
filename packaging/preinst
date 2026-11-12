@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+# DKMS needs the old dkms.conf while removing an installed module version.
+# Do this before dpkg unpacks a package that replaces its /usr/src directory.
+if [ "$1" = upgrade ] && [ -f /usr/lib/python3/dist-packages/panasonic_on_ubuntu/hardware.py ]; then
+    systemctl stop pou-power.service pou-battery.service pou-optical.service || true
+    if ! /usr/bin/python3 -I -m panasonic_on_ubuntu.hardware remove; then
+        systemctl start pou-power.service pou-battery.service pou-optical.service || true
+        exit 1
+    fi
+fi

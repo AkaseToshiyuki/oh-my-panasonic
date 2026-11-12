@@ -27,6 +27,22 @@ PRESETS = {
     'adaptive': dict(pl1=20, pl2=30, turbo=0, fan=0, profile='performance'),
     'boost': dict(pl1=25, pl2=44, turbo=0, fan=0, profile='performance'),
 }
+SR3_PRESETS = {
+    'eco': dict(pl1=8, pl2=12, turbo=1, fan=1, profile='power-saver'),
+    'balanced': dict(pl1=15, pl2=28, turbo=0, fan=0, profile='balanced'),
+    'performance': dict(pl1=28, pl2=55, turbo=0, fan=0, profile='performance'),
+    'adaptive': dict(pl1=28, pl2=55, turbo=0, fan=0, profile='performance'),
+}
+
+
+def model_presets():
+    dmi = Path('/sys/class/dmi/id')
+    model, bios = read(dmi/'product_name'), read(dmi/'bios_version')
+    if model == 'CFSV7-3L' and bios == 'V3.11L22':
+        return PRESETS
+    if model == 'CFSR3-1' and bios == 'V1.00L12' and read(dmi/'product_sku') == 'CF-SR3SKAKS':
+        return SR3_PRESETS
+    return {}
 
 
 def read(path, default=None):
@@ -123,6 +139,7 @@ class Controller:
         self.error = ''
         self.cool_until = 0
         self.guard_tripped = False
+        self.presets = {}
 
     def write(self, path, value):
         # Persist ownership before changing hardware, including a process kill
@@ -181,7 +198,8 @@ class Controller:
             raise RuntimeError('EC 解限温控档暂停：正在排查光驱切换与负载测试期间的系统无响应。')
         if mode not in PRESETS:
             raise ValueError('未知 CPU 预设')
-        if read(Path('/sys/class/dmi/id/product_name')) != 'CFSV7-3L' or read(Path('/sys/class/dmi/id/bios_version')) != 'V3.11L22':
+        self.presets = model_presets()
+        if mode not in self.presets:
             raise ValueError('高级功耗预设尚未在此机型验证')
         temp = temperature()
         if read(RAPL / 'enabled') != '1' or temp is None:
@@ -194,7 +212,7 @@ class Controller:
         paths += [PSTATE / 'no_turbo', FIRMWARE / 'fan_profile']
         files = {str(p): p.read_text().strip() for p in paths}
         profile = power_profiles.get_active()
-        preset = PRESETS[mode]
+        preset = self.presets[mode]
         if any(int(files[str(p)]) <= 0 for p in paths[:2]):
             raise RuntimeError('RAPL 功率限制未启用或不可用，未接管 CPU')
         ceiling = int(files[str(paths[0])])/1e6
@@ -343,8 +361,8 @@ def run():
     from .fan import Controller as FanController
     fan = FanController()
     def base_fan():
-        if controller.mode in PRESETS:
-            return PRESETS[controller.mode]['fan']
+        if controller.mode in controller.presets:
+            return controller.presets[controller.mode]['fan']
         try:
             return int(json.loads(Path('/etc/panasonic-on-ubuntu/fan.json').read_text())['profile'])
         except (OSError, ValueError, KeyError):
@@ -474,6 +492,7 @@ def run():
             state['kernel_guard_c'] = int(read(Path('/sys/module/pou_firmware/parameters/lease_cutoff_c'),'0')) or None
             state['maximum_w'] = controller.ceiling if controller.mode != 'system' else None
             state['request_id'] = request_id
+            state['presets'] = model_presets() if (FIRMWARE/'fan_profile').exists() else {}
             state['pl1_w'] = int(read(RAPL / 'constraint_0_power_limit_uw', '0')) / 1e6 or None
             state['pl2_w'] = int(read(RAPL / 'constraint_1_power_limit_uw', '0')) / 1e6 or None
             state['no_turbo'] = read(PSTATE / 'no_turbo')

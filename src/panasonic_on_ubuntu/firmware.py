@@ -9,7 +9,7 @@ def fan_rpm(hwmon=Path('/sys/class/hwmon')):
         for identity in ('device/firmware_node/path', 'device/path'):
             try:
                 path = (sensor / identity).read_text().strip().replace('_', '')
-                if path not in (r'\SB.PCI0.LPCB.EC0.TFN1', r'\TZ.FAN0'):
+                if path not in (r'\SB.PCI0.LPCB.EC0.TFN1', r'\SB.PC00.LPCB.EC0.TFN1', r'\TZ.FAN0'):
                     continue
                 rpm = int((sensor / 'fan1_input').read_text())
                 if 0 <= rpm < 65535:
