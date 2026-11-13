@@ -258,7 +258,7 @@ class Tray:
         for value, (item, label) in self.cpu_actions.items():
             preset = presets.get(value)
             item.set_visible(bool(preset) or value == 'system' and bool(presets))
-            item.set_label(label + (f" {preset['pl1']} W" if preset else ''))
+            item.set_label((preset.get('label',label) if preset else label) + (f" {preset['pl1']} W" if preset else ''))
         self.pad.set_label('圆形滚动：' + ('运行中' if values['pad'] == 'active' else '未启用'))
         active_fan = power.get('fan', {})
         name = {'custom':'自定义曲线','performance':'性能曲线','manual':'手动输出'}.get(active_fan.get('mode'),{0:'标准自动曲线',1:'静音自动曲线'}.get(fw['fan_profile'],''))

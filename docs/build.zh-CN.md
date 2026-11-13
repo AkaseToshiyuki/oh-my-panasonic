@@ -23,8 +23,8 @@ Facelock 固定于提交 `352bbbcb0f8f61cc21e36a1f038442e94fa6e26b`，构建器�
 
 | 文件 | 用途 |
 | --- | --- |
-| `oh-my-panasonic_0.23.7_amd64.deb` | 所有机型共用的主程序与硬件模块源码 |
-| `panasonic-on-ubuntu_0.23.7_all.deb` | 保留旧包升级和可选组件依赖的空兼容包 |
+| `oh-my-panasonic_0.23.8_amd64.deb` | 所有机型共用的主程序与硬件模块源码 |
+| `panasonic-on-ubuntu_0.23.8_all.deb` | 保留旧包升级和可选组件依赖的空兼容包 |
 
 主包不包含 Panasonic 专有固件。安装器根据 DMI 型号、SKU 和 BIOS 自动选择模块；SV7 后端内部版本为 0.8.1，SR3 后端为 0.2.1，两者共享电池模块源码。只有匹配的后端注册到 DKMS 并自动加载，内核升级时由 DKMS 重建。安装需匹配当前内核的头文件，Secure Boot 环境还需要模块签名。
 
@@ -62,7 +62,7 @@ python3 tools/inspect_power_limits.py --compare /var/tmp/omp-power-before.json /
 安装后可逐文件比较发布包：
 
 ```sh
-python3 tools/verify_installed.py dist/oh-my-panasonic_0.23.7_amd64.deb
+python3 tools/verify_installed.py dist/oh-my-panasonic_0.23.8_amd64.deb
 ```
 
 ## 发布

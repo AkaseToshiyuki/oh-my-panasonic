@@ -124,7 +124,7 @@ export default class Panasonic extends Extension {
                 });
             } else this.stopTelemetry();
         });
-        this.dbus = Gio.DBusExportedObject.wrapJSObject(XML, {Show: () => this.show(), Hide: () => this.hide(), Open: page => {this.show(); this.page(page); this.button.menu.open();}, SetBrightness: p => this.setScreenPercent(p), GetBrightness: () => this.screenPercent() ?? -1, Inspect: () => JSON.stringify({ready: !!this.data.timestamp, page: this.route, visible: !this.hidden, errors: this.data.errors ?? {}, readout: this.percent.text, readoutItems: this.compact?.items ?? [], touchpadActive: this.touchpadIndicator?.area.visible ?? false, version: '0.23.7', sections: ['battery','network','bluetooth','audio','power','touchpad','display']})});
+        this.dbus = Gio.DBusExportedObject.wrapJSObject(XML, {Show: () => this.show(), Hide: () => this.hide(), Open: page => {this.show(); this.page(page); this.button.menu.open();}, SetBrightness: p => this.setScreenPercent(p), GetBrightness: () => this.screenPercent() ?? -1, Inspect: () => JSON.stringify({ready: !!this.data.timestamp, page: this.route, visible: !this.hidden, errors: this.data.errors ?? {}, readout: this.percent.text, readoutItems: this.compact?.items ?? [], touchpadActive: this.touchpadIndicator?.area.visible ?? false, version: '0.23.8', sections: ['battery','network','bluetooth','audio','power','touchpad','display']})});
         this.dbus.export(Gio.DBus.session, '/io/github/panasonic_on_ubuntu/Panel');
         this.owner = Gio.bus_own_name_on_connection(Gio.DBus.session, BUS, Gio.BusNameOwnerFlags.NONE, null, null);
         this.page('home'); this.watchBattery();
@@ -528,12 +528,15 @@ export default class Panasonic extends Extension {
             this.chart('忙碌频率 MHz · 最近 5 分钟',()=>this.data.power?.history?.map(p=>[p[0],p[2]])??[],'MHz');
             this.stat('风扇转速',()=>this.data.firmware?.fan_rpm==null?'未知':fmt(this.data.firmware.fan_rpm,' RPM'));
             const presets=()=>this.data.power?.presets??{};
-            const presetButtons=keys=>keys.map(key=>[cpuModes[key],()=>this.control('cpu',key),()=>`${cpuModes[key]}${presets()[key]?.pl1?` ${presets()[key].pl1} W`:''}`,()=>key==='system'?Object.keys(presets()).length>0:!!presets()[key]]);
-            this.stat('CPU 预设',()=>Object.keys(presets()).length?cpuModes[this.data.power?.mode]:'');
+            const presetName=key=>presets()[key]?.label??cpuModes[key];
+            const presetButtons=keys=>keys.map(key=>[presetName(key),()=>this.control('cpu',key),()=>`${presetName(key)}${presets()[key]?.pl1?` ${presets()[key].pl1} W`:''}`,()=>key==='system'?Object.keys(presets()).length>0:!!presets()[key]]);
+            this.stat('CPU 预设',()=>Object.keys(presets()).length?presetName(this.data.power?.mode):'');
             this.buttons(presetButtons(['eco','balanced','performance']));
             this.buttons(presetButtons(['adaptive','boost','system']));
             this.stat('长期功率上限',()=>fmt(this.data.power?.pl1_w,' W'));
             this.stat('短时功率上限',()=>fmt(this.data.power?.pl2_w,' W'));
+            this.stat('处理器长期上限',()=>fmt(this.data.power?.processor_limits?.pl1_w,' W'));
+            this.stat('处理器短时上限',()=>fmt(this.data.power?.processor_limits?.pl2_w,' W'));
             this.stat('温控目标',()=>fmt(this.data.power?.temperature_target,' °C'));
             this.stat('EC 增强',()=>presets().boost?(this.data.power?.ec_lease?'运行中':'未启用'):'');
             this.stat('内核温度保护',()=>fmt(this.data.power?.kernel_guard_c,' °C'));

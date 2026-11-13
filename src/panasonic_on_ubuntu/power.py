@@ -21,6 +21,7 @@ CONFIG = Path('/etc/panasonic-on-ubuntu/power.json')
 RUNTIME = Path('/run/panasonic-on-ubuntu')
 FIRMWARE = Path('/sys/devices/platform/pou-firmware')
 RAPL = Path('/sys/class/powercap/intel-rapl-mmio:0')
+PROCESSOR_RAPL = Path('/sys/class/powercap/intel-rapl:0')
 PSTATE = Path('/sys/devices/system/cpu/intel_pstate')
 PRESETS = {
     'eco': dict(pl1=6, pl2=10, turbo=1, fan=1, profile='power-saver'),
@@ -33,7 +34,8 @@ SR3_PRESETS = {
     'eco': dict(pl1=8, pl2=12, turbo=1, fan=1, profile='power-saver'),
     'balanced': dict(pl1=15, pl2=28, turbo=0, fan=0, profile='balanced'),
     'performance': dict(pl1=28, pl2=55, turbo=0, fan=0, profile='performance'),
-    'adaptive': dict(pl1=28, pl2=55, turbo=0, fan=0, profile='performance',
+    'adaptive': dict(pl1=35, pl2=55, turbo=0, fan=0, profile='performance',
+                     label='最高性能', processor_guard=True,
                      target_c=83, cutoff_c=85, fan_policy='performance'),
 }
 
@@ -53,6 +55,19 @@ def read(path, default=None):
         return path.read_text().strip()
     except OSError:
         return default
+
+
+def processor_limits():
+    """Read the separate processor RAPL constraints without changing them."""
+    limits = {}
+    for index, key in ((0, 'pl1_w'), (1, 'pl2_w')):
+        try:
+            value = int(read(PROCESSOR_RAPL / f'constraint_{index}_power_limit_uw')) / 1e6
+        except (TypeError, ValueError):
+            continue
+        if 0 < value <= 200:
+            limits[key] = value
+    return limits
 
 
 @lru_cache(maxsize=16)
@@ -227,6 +242,13 @@ class Controller:
             raise RuntimeError('RAPL 功率限制未启用或不可用，未接管 CPU')
         ceiling = int(files[str(paths[0])])/1e6
         short_limit = min(preset['pl2'], int(files[str(paths[1])])/1e6)
+        if preset.get('processor_guard'):
+            limits = processor_limits()
+            if len(limits) != 2:
+                raise RuntimeError('无法读取处理器功率上限，未开启最高性能')
+            ceiling = min(ceiling, limits['pl1_w'])
+            short_limit = min(short_limit, limits['pl2_w'])
+            ceiling = min(ceiling, short_limit)
         if mode == 'boost':
             msr = int(read(Path('/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw'),'0'))/1e6
             if msr <= 0:
@@ -514,6 +536,7 @@ def run():
             state['maximum_w'] = controller.ceiling if controller.mode != 'system' else None
             state['request_id'] = request_id
             state['presets'] = available_presets if (FIRMWARE/'fan_profile').exists() else {}
+            state['processor_limits'] = processor_limits()
             state['pl1_w'] = int(read(RAPL / 'constraint_0_power_limit_uw', '0')) / 1e6 or None
             state['pl2_w'] = int(read(RAPL / 'constraint_1_power_limit_uw', '0')) / 1e6 or None
             state['no_turbo'] = read(PSTATE / 'no_turbo')
