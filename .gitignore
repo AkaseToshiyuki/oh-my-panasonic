@@ -37,3 +37,4 @@ modules.order
 *.pth
 *.pt
 *.safetensors
+*.efivar

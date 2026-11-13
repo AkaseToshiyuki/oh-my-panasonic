@@ -49,6 +49,16 @@ PYTHONPATH=src GSK_RENDERER=cairo GDK_BACKEND=x11 OMP_PRIVATE_BUS_TEST=1 xvfb-ru
 
 `tools/validate_*.py` 和 `tools/verify_display_preview.py` 等实机工具默认显示帮助，显式传入 `--run` 才执行。运行前保存工作；显示测试会暂时改变屏幕配置，电源测试会实际改变设备设置。
 
+功耗限制的只读检查：
+
+```sh
+sudo python3 tools/inspect_power_limits.py --run --output /var/tmp/omp-power-before.json --backup-dir /var/tmp/omp-power-backup
+python3 tools/inspect_power_limits.py --verify-backup /var/tmp/omp-power-backup
+python3 tools/inspect_power_limits.py --compare /var/tmp/omp-power-before.json /var/tmp/omp-power-after.json
+```
+
+前后快照需分别采集，文件和备份目录必须尚不存在。工具读取已有 MSR、sysfs 和 EFI 变量接口，不加载驱动、不调整功耗、不启动负载。接口不可读时保留缺失状态；未知固件不套用其他版本的变量偏移。备份包含私有配置，仅留在本机，不纳入源码或发布物；它不包含完整固件，也不代表已经具备开机失败后的恢复能力。比较结果为 `matched` 只表示采集到的项目一致。工具不会代替电源服务的 85°C 温控保护。
+
 安装后可逐文件比较发布包：
 
 ```sh

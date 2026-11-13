@@ -19,7 +19,7 @@ class ReleaseTests(unittest.TestCase):
         for path in ('docs/next-stage.zh-CN.md', 'docs/release-0.20.1.zh-CN.md',
                      'work/password.txt', 'vendor/backend/target/binary', 'src/model.onnx',
                      'tools/session.log', 'profiles/machine.json', 'kernel/pou_firmware.ko',
-                     'src/model.bin', 'src/model.safetensors'):
+                     'src/model.bin', 'src/model.safetensors', 'tools/CpuSetup.efivar'):
             self.assertFalse(release.allowed(path), path)
         self.assertTrue(release.allowed('docs/usage.zh-CN.md'))
         self.assertTrue(release.allowed('kernel/COPYING'))

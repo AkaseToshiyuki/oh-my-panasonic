@@ -21,7 +21,7 @@ def allowed(path):
         return False
     return path.suffix.lower() not in {'.deb', '.log', '.pem', '.key', '.onnx', '.blob',
                                        '.sqlite', '.db', '.zip', '.gz', '.exe', '.dll', '.dmp',
-                                       '.o', '.ko', '.so', '.a', '.rlib', '.bin', '.pth', '.pt', '.safetensors'}
+                                       '.o', '.ko', '.so', '.a', '.rlib', '.bin', '.pth', '.pt', '.safetensors', '.efivar'}
 
 
 def main():
