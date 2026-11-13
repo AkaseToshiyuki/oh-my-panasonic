@@ -6,9 +6,17 @@ import sys
 
 DMI = Path('/sys/class/dmi/id')
 LOAD = Path('/etc/modules-load.d/oh-my-panasonic.conf')
-BACKENDS = {'sv7': ('pou-firmware', '0.8.1'), 'sr3': ('pou-sr3-fan', '0.2.1')}
+BACKENDS = {'sv7': ('pou-firmware', '0.8.2'), 'sr3': ('pou-sr3-fan', '0.2.2')}
 LEGACY = (('pou-firmware','0.7.1'), ('pou-firmware','0.7.2'), ('pou-firmware','0.8.0'),
-          ('pou-sr3-fan','0.1.0'), ('pou-sr3-fan','0.2.0'))
+          ('pou-firmware','0.8.1'), ('pou-sr3-fan','0.1.0'), ('pou-sr3-fan','0.2.0'),
+          ('pou-sr3-fan','0.2.1'))
+SR3_BIOS = frozenset(('V1.00L12', 'V1.00L27'))
+
+
+def supports_sr3(identity):
+    return (identity.get('product_name') == 'CFSR3-1'
+            and identity.get('product_sku') == 'CF-SR3SKAKS'
+            and identity.get('bios_version') in SR3_BIOS)
 
 
 def selection(identity=None):
@@ -24,7 +32,7 @@ def selection(identity=None):
         if identity.get('product_sku') == 'CF-SV7HD9VS':
             modules.append('pou_battery')
         return 'sv7', modules
-    if (identity.get('product_name'), identity.get('product_sku'), identity.get('bios_version')) == ('CFSR3-1', 'CF-SR3SKAKS', 'V1.00L12'):
+    if supports_sr3(identity):
         return 'sr3', ['pou_sr3_fan', 'pou_battery']
     return None, []
 

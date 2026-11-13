@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 from . import power_profiles
+from .hardware import supports_sr3
 from .diagnostics import StateLog
 from .state_writer import JsonWriter
 
@@ -45,7 +46,8 @@ def model_presets():
     model, bios = read(dmi/'product_name'), read(dmi/'bios_version')
     if model == 'CFSV7-3L' and bios == 'V3.11L22':
         return PRESETS
-    if model == 'CFSR3-1' and bios == 'V1.00L12' and read(dmi/'product_sku') == 'CF-SR3SKAKS':
+    if supports_sr3({'product_name':model, 'bios_version':bios,
+                     'product_sku':read(dmi/'product_sku')}):
         return SR3_PRESETS
     return {}
 

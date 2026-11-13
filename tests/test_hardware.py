@@ -11,8 +11,13 @@ class HardwareTests(unittest.TestCase):
         self.assertEqual(hardware.selection({**sv7,'product_sku':'different'}),('sv7',['pou_firmware']))
         self.assertEqual(hardware.selection({**sv7,'bios_version':'unknown'}),(None,[]))
         sr3={'product_name':'CFSR3-1','bios_version':'V1.00L12','product_sku':'CF-SR3SKAKS'}
-        self.assertEqual(hardware.selection(sr3),('sr3',['pou_sr3_fan','pou_battery']))
-        self.assertEqual(hardware.selection({**sr3,'product_sku':'different'}),(None,[]))
+        for bios in ('V1.00L12','V1.00L27'):
+            sr3['bios_version']=bios
+            self.assertEqual(hardware.selection(sr3),('sr3',['pou_sr3_fan','pou_battery']))
+            self.assertEqual(hardware.selection({**sr3,'product_sku':'different'}),(None,[]))
+            self.assertEqual(hardware.selection({**sr3,'product_name':'different'}),(None,[]))
+        for bios in ('V1.00L28','V1.00L27-test','',None):
+            self.assertEqual(hardware.selection({**sr3,'bios_version':bios}),(None,[]))
         self.assertEqual(hardware.selection({}),(None,[]))
 
     def test_common_installer_selects_only_matching_backend(self):

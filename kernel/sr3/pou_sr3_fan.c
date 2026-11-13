@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* CFSR3-1 V1.00L12: native TFN1 requests with an expiring lease.
+/* Validated CFSR3-1 firmware: native TFN1 requests with an expiring lease.
  * CEFM=1 enables OS active cooling; it is not the OEM Quiet policy enum.
  * Without a live lease, CEFM=0 returns cooling to firmware. */
 #include <linux/acpi.h>
@@ -11,6 +11,7 @@
 #include <linux/suspend.h>
 #include <linux/workqueue.h>
 #include <asm/msr.h>
+#include "pou_models.h"
 
 #define EC "\\_SB.PC00.LPCB.EC0."
 static struct platform_device *pou_device;
@@ -280,9 +281,7 @@ static int __init pou_init(void)
 {
     acpi_handle handle;
     int err;
-    if (!dmi_match(DMI_PRODUCT_NAME, "CFSR3-1") ||
-        !dmi_match(DMI_PRODUCT_SKU, "CF-SR3SKAKS") ||
-        !dmi_match(DMI_BIOS_VERSION, "V1.00L12"))
+    if (!pou_sr3_supported())
         return -ENODEV;
     if (ACPI_FAILURE(acpi_get_handle(NULL, EC "SEFM", &handle)) ||
         read_profile(&original))
@@ -334,5 +333,5 @@ module_init(pou_init);
 module_exit(pou_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AkaseToshiyuki");
-MODULE_VERSION("0.2.1");
+MODULE_VERSION("0.2.2");
 MODULE_DESCRIPTION("Guarded native fan control for validated Panasonic CF-SR3");

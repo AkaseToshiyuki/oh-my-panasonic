@@ -12,6 +12,7 @@
 #include <linux/reboot.h>
 #include <linux/power_supply.h>
 #include <linux/delay.h>
+#include "pou_models.h"
 
 static struct platform_device *pou_battery;
 static DEFINE_MUTEX(battery_lock);
@@ -296,8 +297,7 @@ static int __init battery_init(void)
         dmi_match(DMI_PRODUCT_SKU,"CF-SV7HD9VS")) {
         ec_command = "\\_SB.PCI0.LPCB.EC0.EC88";
         offline_caps = 3;
-    } else if (dmi_match(DMI_PRODUCT_NAME,"CFSR3-1") && dmi_match(DMI_BIOS_VERSION,"V1.00L12") &&
-               dmi_match(DMI_PRODUCT_SKU,"CF-SR3SKAKS")) {
+    } else if (pou_sr3_supported()) {
         ec_command = "\\_SB.PC00.LPCB.EC0.EC88";
         offline_caps = 3;
     } else return -ENODEV;
@@ -342,5 +342,5 @@ static void __exit battery_exit(void)
 module_init(battery_init); module_exit(battery_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AkaseToshiyuki");
-MODULE_VERSION("0.8.1");
+MODULE_VERSION("0.8.2");
 MODULE_DESCRIPTION("Validated Panasonic battery controls with expiring kernel lease");

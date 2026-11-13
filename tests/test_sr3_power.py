@@ -58,10 +58,12 @@ class SR3PowerTests(unittest.TestCase):
     def test_sku_and_bios_must_both_match(self):
         values={'product_name':'CFSR3-1','bios_version':'V1.00L12','product_sku':'CF-SR3SKAKS'}
         with patch.object(power,'read',side_effect=lambda p:values.get(p.name)):
-            self.assertEqual(power.model_presets()['performance']['pl1'],28)
-            self.assertEqual(power.model_presets()['adaptive']['pl1'],35)
-            self.assertEqual(power.model_presets()['adaptive']['label'],'最高性能')
-            self.assertNotIn('boost',power.model_presets())
+            for bios in ('V1.00L12','V1.00L27'):
+                values['bios_version']=bios
+                self.assertEqual(power.model_presets()['performance']['pl1'],28)
+                self.assertEqual(power.model_presets()['adaptive']['pl1'],35)
+                self.assertEqual(power.model_presets()['adaptive']['label'],'最高性能')
+                self.assertNotIn('boost',power.model_presets())
             values['bios_version']='V1.00L99'
             self.assertEqual(power.model_presets(),{})
             values['bios_version']='V1.00L12';values['product_sku']='different'
