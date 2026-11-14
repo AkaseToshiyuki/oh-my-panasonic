@@ -72,6 +72,32 @@ def processor_limits():
     return limits
 
 
+def boot_ceiling(current, short_limit, limits):
+    """Allow only this boot's verified envelope over the stock MMIO baseline."""
+    if current != 28 or short_limit != 55 or limits != {'pl1_w':35,'pl2_w':55}:
+        return current
+    try:
+        path=RUNTIME/'boot-power-envelope.json'
+        stat=path.stat()
+        if stat.st_uid!=0 or stat.st_mode & 0o022:
+            return current
+        value=json.loads(path.read_text())
+        dmi=Path('/sys/class/dmi/id')
+        from .boot_unlock import supported
+        if (value.get('boot_id')==read(Path('/proc/sys/kernel/random/boot_id'))
+                and value.get('sku')==read(dmi/'product_sku')
+                and value.get('bios')==read(dmi/'bios_version')
+                and read(dmi/'product_name')=='CFSR3-1'
+                and supported(value['sku'],value['bios'])
+                and value.get('generation',0)>0
+                and (value.get('pl1_w'),value.get('pl2_w'),value.get('baseline_pl1_w'),
+                     value.get('baseline_pl2_w'))==(35,55,28,55)):
+            return 35
+    except (OSError,ValueError,TypeError,KeyError):
+        pass
+    return current
+
+
 @lru_cache(maxsize=16)
 def writer(path, mode):
     return JsonWriter(path,mode)
@@ -248,6 +274,7 @@ class Controller:
             limits = processor_limits()
             if len(limits) != 2:
                 raise RuntimeError('无法读取处理器功率上限，未开启最高性能')
+            ceiling = boot_ceiling(ceiling, short_limit, limits)
             ceiling = min(ceiling, limits['pl1_w'])
             short_limit = min(short_limit, limits['pl2_w'])
             ceiling = min(ceiling, short_limit)

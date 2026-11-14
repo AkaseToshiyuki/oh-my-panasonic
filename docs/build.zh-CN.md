@@ -5,7 +5,7 @@
 ## 主程序与硬件模块
 
 ```sh
-sudo apt install git build-essential cargo rustc pkg-config libsystemd-dev libtss2-dev dpkg-dev python3-gi python3-gi-cairo python3-evdev gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-nm-1.0
+sudo apt install git gnu-efi build-essential cargo rustc pkg-config libsystemd-dev libtss2-dev dpkg-dev python3-gi python3-gi-cairo python3-evdev gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-nm-1.0
 export CARGO_BUILD_JOBS=2
 (umask 077; cd vendor/letsnote-wheelpad; cargo test --locked)
 git clone https://github.com/tyvsmith/facelock.git ../facelock
@@ -23,10 +23,12 @@ Facelock 固定于提交 `352bbbcb0f8f61cc21e36a1f038442e94fa6e26b`，构建器�
 
 | 文件 | 用途 |
 | --- | --- |
-| `oh-my-panasonic_0.23.9_amd64.deb` | 所有机型共用的主程序与硬件模块源码 |
-| `panasonic-on-ubuntu_0.23.9_all.deb` | 保留旧包升级和可选组件依赖的空兼容包 |
+| `oh-my-panasonic_0.24.1_amd64.deb` | 所有机型共用的主程序与硬件模块源码 |
+| `panasonic-on-ubuntu_0.24.1_all.deb` | 保留旧包升级和可选组件依赖的空兼容包 |
 
 主包不包含 Panasonic 专有固件。安装器根据 DMI 型号、SKU 和 BIOS 自动选择模块；SV7 后端内部版本为 0.8.2，SR3 后端为 0.2.2，两者共享电池模块源码。只有匹配的后端注册到 DKMS 并自动加载，内核升级时由 DKMS 重建。安装需匹配当前内核的头文件，Secure Boot 环境还需要模块签名。
+
+主包构建器还使用 GNU-EFI 编译启动守卫并收集其授权声明；安装本包不会自动修改 EFI 启动项。`python3 tools/test_bootguard_vm.py --run` 使用受 CPU 和内存限制的 KVM / OVMF 虚拟机验证启用、健康确认及失败回退，不访问宿主固件变量。
 
 ## 可选人脸与核显组件
 
@@ -62,11 +64,11 @@ python3 tools/inspect_power_limits.py --compare /var/tmp/omp-power-before.json /
 安装后可逐文件比较发布包：
 
 ```sh
-python3 tools/verify_installed.py dist/oh-my-panasonic_0.23.9_amd64.deb
+python3 tools/verify_installed.py dist/oh-my-panasonic_0.24.1_amd64.deb
 ```
 
 ## 发布
 
 只发布通过检查的 Git 提交及 `dist/` 中本版本的指定包；不要归档整个工作区。用 `git archive` 导出源码，附带 SHA-256 校验文件。检查源码归档和 deb 内不存在日志、研究文件、个人设置、模型或凭据。
 
-当前发布定位为 CF-SV7 / CF-SR3 的统一测试版。发布到托管平台后应启用私有漏洞报告，并在仓库说明中设置真实的支持入口。
+当前发布为 CF-SV7 / CF-SR3 的统一版本，可选启动守卫的验证范围见硬件兼容说明。发布到托管平台后应启用私有漏洞报告，并在仓库说明中设置真实的支持入口。

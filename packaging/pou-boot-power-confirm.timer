@@ -1,0 +1,10 @@
+[Unit]
+Description=Confirm a healthy Oh My Panasonic power boot
+
+[Timer]
+OnBootSec=60
+AccuracySec=1
+Unit=pou-boot-power-confirm.service
+
+[Install]
+WantedBy=timers.target

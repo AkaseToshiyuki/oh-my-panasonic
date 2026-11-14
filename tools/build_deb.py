@@ -7,11 +7,13 @@ import tempfile
 from deb_metadata import finalize
 from collect_rust_licenses import collect
 from rust_build import environment
+from build_bootguard import build as build_bootguard
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.23.9'
+VERSION = '0.24.1'
 
 def build():
+    build_bootguard()
     wheelpad = ROOT/'vendor/letsnote-wheelpad'
     env = environment(ROOT, 'oh-my-panasonic')
     # Keep the package input at a fixed location even when the caller uses a shared target cache.
@@ -32,6 +34,10 @@ def build():
         for source in (ROOT / 'src/panasonic_on_ubuntu').glob('*.py'):
             put(source, 'usr/lib/python3/dist-packages/panasonic_on_ubuntu/' + source.name)
         put('build/pou-pose-verify','usr/libexec/pou-pose-verify',0o755)
+        put('build/pou-bootguard.efi','usr/lib/oh-my-panasonic/pou-bootguard.efi',0o644)
+        put('build/gnu-efi-copyright','usr/share/doc/panasonic-on-ubuntu/gnu-efi-copyright')
+        for name in ('pou-boot-power',):
+            put('packaging/'+name,'usr/bin/'+name,0o755)
         put('vendor/letsnote-wheelpad/target/release/letsnote-wheelpad', 'usr/libexec/pou-wheelpad', 0o755)
         subprocess.run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                         str(ROOT / 'src/face-session.c'), '-lsystemd', '-o',
@@ -39,7 +45,7 @@ def build():
         (stage/'usr/libexec/pou-face-session').chmod(0o755)
         for name in ['pou-control', 'pou-adjust', 'pou-input-check', 'pou-face-manage', 'pou-face-check', 'pou-face-authorize']:
             put('packaging/' + name, 'usr/libexec/' + name, 0o755)
-        for name in ['pou-wheelpad.service', 'pou-power.service', 'pou-optical.service', 'pou-battery.service', 'pou-face-broker.socket', 'pou-face-broker@.service', 'pou-firmware-restore.service']:
+        for name in ['pou-wheelpad.service', 'pou-power.service', 'pou-optical.service', 'pou-battery.service', 'pou-face-broker.socket', 'pou-face-broker@.service', 'pou-firmware-restore.service', 'pou-boot-power-init.service', 'pou-boot-power-confirm.service', 'pou-boot-power-confirm.timer']:
             put('packaging/' + name, 'usr/lib/systemd/system/' + name)
         for name in ('pou_firmware.c', 'pou_fan_control.h', 'pou_models.h', 'pou_battery.c', 'dkms.conf', 'Makefile', 'COPYING'):
             put('kernel/' + name, 'usr/src/pou-firmware-0.8.2/' + name)
@@ -90,7 +96,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: AkaseToshiyuki <51808852+AkaseToshiyuki@users.noreply.github.com>
 Depends: dkms (>= 3.0), python3 (>= 3.10), gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, python3-gi, python3-pulsectl, python3-gi-cairo, python3-evdev, gir1.2-gtk-4.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gir1.2-adw-1, gir1.2-nm-1.0, pulseaudio-utils, power-profiles-daemon, upower, polkitd, pkexec, systemd, udev, libsystemd0, libc6 (>= 2.39), libgcc-s1, libtss2-esys-3.0.2-0t64, libtss2-mu-4.0.1-0t64, libtss2-tctildr0t64
-Recommends: network-manager, wireplumber, bluez, gnome-control-center, linux-tools-generic, iw, linux-headers-generic
+Recommends: network-manager, wireplumber, bluez, gnome-control-center, linux-tools-generic, iw, linux-headers-generic, efibootmgr, thermald
 Suggests: facelock, panasonic-on-ubuntu-face-gpu
 Conflicts: letsnote-wheelpad, panasonic-on-ubuntu-firmware-dkms, oh-my-panasonic-sr3-dkms
 Replaces: panasonic-on-ubuntu (<< 0.20.0), panasonic-on-ubuntu-firmware-dkms, oh-my-panasonic-sr3-dkms

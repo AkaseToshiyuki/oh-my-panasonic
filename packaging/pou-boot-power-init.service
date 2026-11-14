@@ -1,0 +1,16 @@
+[Unit]
+Description=Oh My Panasonic boot power initialization and recovery
+After=systemd-modules-load.service
+Before=pou-power.service
+RequiresMountsFor=/boot/efi /var/lib/oh-my-panasonic
+ConditionPathExists=/var/lib/oh-my-panasonic/boot-unlock/enabled
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pou-boot-power initialize --apply
+RemainAfterExit=yes
+TimeoutStartSec=45
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

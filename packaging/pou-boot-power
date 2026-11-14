@@ -1,0 +1,3 @@
+#!/usr/bin/python3
+from panasonic_on_ubuntu.boot_manager import main
+main()

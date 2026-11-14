@@ -2,7 +2,7 @@
 Description=Oh My Panasonic CPU measurement and guarded power presets
 # The daemon announces readiness before applying presets. Ubuntu orders
 # power-profiles-daemon after multi-user.target and activates it over D-Bus.
-After=dbus.service systemd-modules-load.service pou-firmware-restore.service
+After=dbus.service systemd-modules-load.service pou-firmware-restore.service pou-boot-power-init.service
 
 [Service]
 Type=notify

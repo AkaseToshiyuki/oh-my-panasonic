@@ -1,5 +1,9 @@
 #!/bin/sh
 set -e
+if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
+    /usr/bin/pou-boot-power removal-check --apply
+    systemctl disable --now pou-boot-power-confirm.timer pou-boot-power-init.service || true
+fi
 if [ "$1" = remove ] || [ "$1" = deconfigure ] || { [ "$1" = upgrade ] && dpkg --compare-versions "$2" lt 0.17.0; }; then
     /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face_privilege import edit_hooks; edit_hooks(False)'
     systemctl disable --now pou-face-broker.socket || true

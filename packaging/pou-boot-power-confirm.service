@@ -1,0 +1,10 @@
+[Unit]
+Description=Oh My Panasonic boot power health confirmation
+After=multi-user.target pou-power.service pou-battery.service thermald.service
+ConditionPathExists=/var/lib/oh-my-panasonic/boot-unlock/enabled
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pou-boot-power confirm --apply
+TimeoutStartSec=45
+UMask=0077
