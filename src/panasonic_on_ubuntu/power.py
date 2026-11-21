@@ -190,6 +190,9 @@ class Controller:
         self.temperature_target = 90
         self.temperature_cutoff = 94
         self.guard_short_burst = False
+        self.fixed_cool_samples = 0
+        self.fixed_clamped = False
+        self.last_ramp_sample = None
 
     def write(self, path, value):
         # Persist ownership before changing hardware, including a process kill
@@ -200,6 +203,8 @@ class Controller:
         path.write_text(str(value) + '\n')
         actual = read(path)
         if actual != str(value):
+            if actual is None:
+                raise OSError(f'{path.name}: 暂时无法读回')
             raise RuntimeError(f'{path.name}: 请求 {value}，读回 {actual}')
 
     def restore(self):
@@ -219,7 +224,9 @@ class Controller:
                 try:
                     # Do not overwrite a stricter limit imposed externally.
                     current = read(Path(name))
-                    if current == self.last.get(name):
+                    if current is None and name in self.last:
+                        raise OSError(f'{name}: 设备暂时不可读')
+                    if current is not None and current == self.last.get(name):
                         Path(name).write_text(old + '\n')
                 except OSError as exc:
                     errors.append(str(exc))
@@ -231,7 +238,7 @@ class Controller:
             except power_profiles.ProfileError as exc:
                 profile_error = exc
             if errors:
-                raise RuntimeError('; '.join(errors))
+                raise OSError('; '.join(errors))
             if profile_error:
                 raise profile_error
             (RUNTIME / 'baseline.json').unlink(missing_ok=True)
@@ -239,8 +246,31 @@ class Controller:
             self.last = {}
         self.mode = 'system'
 
+    def active_performance_limit(self):
+        if (self.mode != 'performance' or self.error or not self.baseline
+                or not self.presets.get('adaptive', {}).get('processor_guard')):
+            return None
+        nominal = self.presets['performance']['pl1']
+        path = RAPL / 'constraint_0_power_limit_uw'
+        expected = str(int(nominal * 1e6))
+        if self.target == nominal and self.last.get(str(path)) == expected and read(path) == expected:
+            return nominal
+        return None
+
     def apply(self, mode, measured=None):
-        self.restore()
+        previous_limit = self.active_performance_limit() if mode == 'adaptive' else None
+        if previous_limit is None:
+            self.restore()
+        try:
+            self.apply_preset(mode, measured, previous_limit)
+        except Exception:
+            self.restore()
+            raise
+
+    def apply_preset(self, mode, measured, previous_limit):
+        self.fixed_cool_samples = 0
+        self.fixed_clamped = False
+        self.last_ramp_sample = None
         self.error = ''
         if mode == 'system':
             return
@@ -252,8 +282,11 @@ class Controller:
         if mode not in self.presets:
             raise ValueError('高级功耗预设尚未在此机型验证')
         temp = temperature()
-        if read(RAPL / 'enabled') != '1' or temp is None:
-            raise RuntimeError('缺少已启用的 MMIO RAPL 或 CPU 温度接口')
+        enabled = read(RAPL / 'enabled')
+        if enabled == '0':
+            raise RuntimeError('外部策略已关闭 MMIO RAPL')
+        if enabled != '1' or (temp is None and previous_limit is None):
+            raise OSError('缺少已启用的 MMIO RAPL 或 CPU 温度接口')
         if mode == 'boost' and read(FIRMWARE / 'performance_lease_version') != '1':
             raise RuntimeError('增强性能需要带独立温度保护的固件模块 0.4.0 或更新版')
         if mode == 'boost' and 'i5-8250U' not in Path('/proc/cpuinfo').read_text():
@@ -261,11 +294,23 @@ class Controller:
         paths = [RAPL / f'constraint_{i}_power_limit_uw' for i in (0, 1)]
         paths += [PSTATE / 'no_turbo', FIRMWARE / 'fan_profile']
         files = {str(p): p.read_text().strip() for p in paths}
-        profile = power_profiles.get_active()
+        active_profile = power_profiles.get_active()
+        profile = active_profile
+        if previous_limit is not None:
+            # Carry the rollback baseline forward only for settings we still own.
+            if files[str(paths[0])] != self.last.get(str(paths[0])):
+                previous_limit = None
+            for name, current in files.items():
+                if self.last.get(name) == current:
+                    files[name] = self.baseline['files'][name]
+            if active_profile == self.baseline.get('last_profile'):
+                profile = self.baseline['profile']
         preset = self.presets[mode]
         self.temperature_target = preset.get('target_c', 90)
         self.temperature_cutoff = preset.get('cutoff_c', 94)
         self.guard_short_burst = mode == 'adaptive' and 'cutoff_c' in preset
+        if any(not files[str(p)].isdecimal() for p in paths[:2]):
+            raise OSError('RAPL 接口暂时不可读')
         if any(int(files[str(p)]) <= 0 for p in paths[:2]):
             raise RuntimeError('RAPL 功率限制未启用或不可用，未接管 CPU')
         ceiling = int(files[str(paths[0])])/1e6
@@ -273,7 +318,7 @@ class Controller:
         if preset.get('processor_guard'):
             limits = processor_limits()
             if len(limits) != 2:
-                raise RuntimeError('无法读取处理器功率上限，未开启最高性能')
+                raise OSError('处理器功率上限暂时不可读')
             ceiling = boot_ceiling(ceiling, short_limit, limits)
             ceiling = min(ceiling, limits['pl1_w'])
             short_limit = min(short_limit, limits['pl2_w'])
@@ -293,7 +338,6 @@ class Controller:
         self.short_ceiling = None
         if self.guard_short_burst:
             self.short_ceiling = short_limit
-            short_limit = min(short_limit, self.target)
         if mode == 'boost':
             self.short_ceiling = short_limit
             fresh = measured and time.monotonic() - measured['received'] < 8
@@ -305,34 +349,69 @@ class Controller:
             short_limit = self.target
         self.cool_until = 0
         self.guard_tripped = False
-        self.baseline = dict(files=files, profile=profile)
-        atomic(RUNTIME / 'baseline.json', self.baseline, 0o600)
-        try:
-            self.baseline['last_profile'] = preset['profile']
-            atomic(RUNTIME / 'baseline.json', {**self.baseline, 'last': self.last}, 0o600)
+        self.baseline = dict(files=files, profile=profile, last_profile=preset['profile'])
+        atomic(RUNTIME / 'baseline.json', {**self.baseline, 'last': self.last}, 0o600)
+        if previous_limit is None or active_profile != preset['profile']:
             power_profiles.set_active(preset['profile'])
-            self.write(FIRMWARE / 'fan_profile', preset['fan'])
-            self.write(PSTATE / 'no_turbo', preset['turbo'])
-            self.write(paths[1], int(short_limit*1e6))
-            self.write(paths[0], int(self.target*1e6))
-            self.mode = mode
-        except Exception:
-            self.restore()
-            raise
+        self.write(FIRMWARE / 'fan_profile', preset['fan'])
+        self.write(PSTATE / 'no_turbo', preset['turbo'])
+        if self.guard_short_burst:
+            live = temperature()
+            sampled = (measured or {}).get('temperature')
+            fresh = measured and 0 <= time.monotonic() - measured['received'] < 8
+            cool_max = self.temperature_target - 4
+            if (previous_limit is not None and previous_limit <= self.ceiling and fresh
+                    and live is not None and 0 < live <= cool_max
+                    and sampled is not None and 0 < sampled <= cool_max):
+                self.target = previous_limit
+                self.last_ramp_sample = measured['received']
+            if (live is None or live <= 0 or live >= self.temperature_cutoff
+                    or (fresh and sampled is not None and sampled >= self.temperature_cutoff)):
+                self.target = min(6, self.ceiling)
+            short_limit = min(short_limit, self.target)
+        self.write(paths[1], int(short_limit*1e6))
+        self.write(paths[0], int(self.target*1e6))
+        self.mode = mode
 
     def tick(self, measured):
         if self.mode == 'system':
             return
         temp = temperature()
-        fresh = measured and time.monotonic() - measured['received'] < 8
+        fresh = measured and 0 <= time.monotonic() - measured['received'] < 8
+        if self.guard_short_burst and fresh and temp is not None:
+            sampled = measured.get('temperature', temp)
+            temp = max(temp, sampled) if sampled is not None and 0 < sampled and 0 < temp else None
         if self.mode in ('adaptive','boost'):
-            self.target = thermal_target(self.target, self.ceiling, temp if fresh else None,
-                                         self.temperature_target, self.temperature_cutoff)
-        elif temp is None or temp >= 94:
+            target = thermal_target(self.target, self.ceiling, temp if fresh else None,
+                                    self.temperature_target, self.temperature_cutoff)
+            if self.guard_short_burst and fresh:
+                if self.last_ramp_sample == measured['received']:
+                    target = min(target, self.target)
+                self.last_ramp_sample = measured['received']
+            self.target = target
+        elif temp is None or not 0 < temp < self.temperature_cutoff:
+            self.fixed_clamped = True
+            self.fixed_cool_samples = 0
+            self.last_ramp_sample = (measured or {}).get('received')
             self.target = min(6,self.ceiling)
-            self.write(FIRMWARE / 'fan_profile', 0)
+            if read(FIRMWARE / 'fan_profile') != '0':
+                self.write(FIRMWARE / 'fan_profile', 0)
+        elif self.fixed_clamped:
+            sampled = (measured or {}).get('temperature')
+            cool = fresh and sampled is not None and 0 < sampled < self.temperature_cutoff - 8 and temp < self.temperature_cutoff - 8
+            if not cool:
+                self.fixed_cool_samples = 0
+            elif self.last_ramp_sample != measured['received']:
+                self.last_ramp_sample = measured['received']
+                self.fixed_cool_samples += 1
+                if self.fixed_cool_samples >= 2:
+                    self.target = min(self.ceiling, self.target + 2)
+                    if self.target == self.ceiling:
+                        self.fixed_clamped = False
+                        if self.presets[self.mode]['fan'] and read(FIRMWARE / 'fan_profile') == '0':
+                            self.write(FIRMWARE / 'fan_profile', self.presets[self.mode]['fan'])
         path = RAPL / 'constraint_0_power_limit_uw'
-        actual = int(read(path))
+        actual = limit_value(path)
         if actual <= 0:
             raise RuntimeError('检测到外部关闭 RAPL 限制，已退出 CPU 接管')
         # Respect thermald/firmware reductions instead of racing them with repeated boosts.
@@ -380,7 +459,7 @@ class Controller:
             allowed = fresh and temp is not None and temp < self.temperature_target and self.target > 6
         if self.short_ceiling is not None:
             short_path = RAPL / 'constraint_1_power_limit_uw'
-            actual_short = int(read(short_path, '0'))
+            actual_short = limit_value(short_path)
             if actual_short <= 0:
                 raise RuntimeError('短时功率限制已关闭')
             if actual_short < int(self.last.get(str(short_path), actual_short)):
@@ -392,11 +471,35 @@ class Controller:
         atomic(RUNTIME / 'baseline.json', {**self.baseline, 'last': self.last}, 0o600)
 
 
+def float_or_zero(text):
+    return int(text) if text and text.isdecimal() else 0
+
+
+def limit_value(path):
+    value = read(path)
+    if value is None or not value.isdecimal():
+        raise OSError(f'{path.name}: 功率接口暂时不可读')
+    return int(value)
+
+
 def recover(controller=None):
+    try:
+        recover_cpu(controller)
+    finally:
+        recover_devices()
+
+
+def recover_devices():
     from .ssd_power import restore as restore_ssd
-    restore_ssd()
     from .peripherals import restore as restore_peripherals
-    restore_peripherals()
+    for restore in (restore_ssd, restore_peripherals):
+        try:
+            restore()
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            logging.getLogger('pou-power').warning('device restore deferred: %s', exc)
+
+
+def recover_cpu(controller=None):
     p = RUNTIME / 'baseline.json'
     if not p.exists():
         return
@@ -409,6 +512,35 @@ def recover(controller=None):
     allowed |= {str(PSTATE / 'no_turbo'), str(FIRMWARE / 'fan_profile')}
     controller.baseline['files'] = {k: v for k, v in value['files'].items() if k in allowed}
     controller.restore()
+
+
+def recover_on_stop():
+    try:
+        recover()
+    except power_profiles.ProfilesUnavailable:
+        state = subprocess.run(['systemctl', 'is-system-running'], capture_output=True,
+                               text=True, timeout=3)
+        if state.stdout.strip() != 'stopping':
+            raise
+        print('系统正在关机，电源配置服务已退出。', file=sys.stderr)
+
+
+class ProfileRetry:
+    def __init__(self):
+        self.deadline = None
+        self.delay = 2
+        self.profiles_unavailable = False
+
+    def failed(self, error, now):
+        self.profiles_unavailable = isinstance(error, power_profiles.ProfilesUnavailable)
+        if isinstance(error, OSError) or self.profiles_unavailable:
+            self.deadline = now + self.delay
+            self.delay = min(60, self.delay * 2)
+        else:
+            self.deadline = None
+
+    def due(self, now):
+        return self.deadline is not None and now >= self.deadline
 
 
 def run():
@@ -424,7 +556,7 @@ def run():
     controller = Controller()
     try:
         recover(controller)
-    except power_profiles.ProfilesUnavailable as exc:
+    except (OSError, power_profiles.ProfilesUnavailable) as exc:
         log.warning('startup restore deferred: %s', exc)
     from .fan import Controller as FanController
     fan = FanController()
@@ -488,7 +620,8 @@ def run():
     from . import pd_request
     pd_stop = pd_request.start(atomic)
     previous_config = None
-    retry_at = None
+    retry = ProfileRetry()
+    desired_mode = None
     request_id = None
     records = StateLog()
     wall_offset=time.time()-time.monotonic()
@@ -507,18 +640,21 @@ def run():
                 start_sampler('process exit or missing samples')
             config = read(CONFIG, '{}')
             changed = config != previous_config
-            if changed or (retry_at is not None and time.monotonic() >= retry_at):
+            if changed or retry.due(time.monotonic()):
+                if changed:
+                    retry = ProfileRetry()
                 previous_config = config
-                retry_at = None
+                retry.deadline = None
                 try:
                     request = json.loads(config)
                     request_id = request.get('request_id')
-                    controller.apply(request.get('mode', 'system'),measured)
+                    desired_mode = request.get('mode', 'system')
+                    controller.apply(desired_mode,measured)
                     log.info('mode=%s target=%s',controller.mode,controller.target)
-                except power_profiles.ProfilesUnavailable as exc:
+                except (power_profiles.ProfilesUnavailable, OSError) as exc:
                     controller.error = str(exc)
-                    retry_at = time.monotonic() + 5
-                    log.warning('power service unavailable; retry in 5 s: %s', exc)
+                    retry.failed(exc,time.monotonic())
+                    log.warning('power apply deferred: %s', exc)
                 except Exception as exc:
                     controller.error = str(exc)
                     log.warning('config rejected: %s',exc)
@@ -550,24 +686,29 @@ def run():
                             pass
             try:
                 controller.tick(measured)
+                if controller.mode != 'system':
+                    retry.delay = 2
             except Exception as exc:
                 controller.error = str(exc)
                 try:
                     controller.restore()
-                except power_profiles.ProfilesUnavailable as restore_error:
-                    retry_at = time.monotonic() + 5
+                except (OSError, RuntimeError) as restore_error:
                     log.warning('restore deferred: %s', restore_error)
+                retry.failed(exc,time.monotonic())
             fresh = measured and time.monotonic() - measured['received'] < 8
             state = dict(timestamp=time.time(), mode=controller.mode, error=controller.error or ('' if fresh else '正在恢复硬件采样，暂不显示过期读数'), sample=measured if fresh else None, history=history, source='Linux turbostat · RAPL / APERF / MPERF', target_w=controller.target if controller.mode != 'system' else None, temperature_target=controller.temperature_target if controller.mode in ('adaptive','boost') else None)
             state['ec_lease'] = read(FIRMWARE / 'performance_lease') == '1'
             state['lease_reason'] = read(FIRMWARE / 'lease_reason')
             state['kernel_guard_c'] = int(read(Path('/sys/module/pou_firmware/parameters/lease_cutoff_c'),'0')) or None
             state['maximum_w'] = controller.ceiling if controller.mode != 'system' else None
+            state['requested_mode'] = desired_mode
+            state['retry_pending'] = retry.deadline is not None
+            state['profile_retry_pending'] = retry.deadline is not None and retry.profiles_unavailable
             state['request_id'] = request_id
             state['presets'] = available_presets if (FIRMWARE/'fan_profile').exists() else {}
             state['processor_limits'] = processor_limits()
-            state['pl1_w'] = int(read(RAPL / 'constraint_0_power_limit_uw', '0')) / 1e6 or None
-            state['pl2_w'] = int(read(RAPL / 'constraint_1_power_limit_uw', '0')) / 1e6 or None
+            state['pl1_w'] = float_or_zero(read(RAPL / 'constraint_0_power_limit_uw')) / 1e6 or None
+            state['pl2_w'] = float_or_zero(read(RAPL / 'constraint_1_power_limit_uw')) / 1e6 or None
             state['no_turbo'] = read(PSTATE / 'no_turbo')
             try:
                 performance_fan = controller.presets.get(controller.mode, {}).get('fan_policy') == 'performance'
@@ -614,15 +755,14 @@ def run():
             controller.restore()
         except power_profiles.ProfileError as exc:
             log.warning('power profile restore deferred; snapshot retained: %s', exc)
-        restore_ssd()
-        restore_peripherals()
+        recover_devices()
         log.info('service stopped; pending profile restore=%s', controller.baseline is not None)
 
 
 if __name__ == '__main__':
     try:
         if len(sys.argv) > 1 and sys.argv[1] == 'restore':
-            recover()
+            recover_on_stop()
         else:
             run()
     except power_profiles.ProfileError as exc:

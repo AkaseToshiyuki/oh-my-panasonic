@@ -9,6 +9,16 @@ from panasonic_on_ubuntu.power import thermal_target, Controller
 
 
 class ThermalGuardTests(unittest.TestCase):
+    def test_stop_only_tolerates_missing_profile_service_during_shutdown(self):
+        unavailable=power.power_profiles.ProfilesUnavailable('offline')
+        with patch.object(power,'recover',side_effect=unavailable),patch.object(power.subprocess,'run') as query:
+            query.return_value.stdout='stopping\n'
+            power.recover_on_stop()
+            query.return_value.stdout='degraded\n'
+            with self.assertRaises(power.power_profiles.ProfilesUnavailable):power.recover_on_stop()
+        with patch.object(power,'recover',side_effect=OSError('hardware')):
+            with self.assertRaises(OSError):power.recover_on_stop()
+
     def test_cool_boost_starts_above_performance_and_unlocks_stock_burst(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

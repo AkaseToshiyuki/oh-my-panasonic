@@ -207,23 +207,8 @@ impl Fsm {
                         // forwarding suppression is keyed off state.
                         detector.on_gesture_start();
                         self.state = FsmState::Scrolling { contact };
-                        // Feed the engaging sample so the first tick can
-                        // emit on this very frame if the gesture is fast
-                        // enough.
                         detector.push_if_moved(s);
-                        let ticks = detector.step(scroll.sensitivity);
-                        if ticks != 0 {
-                            emit(
-                                ticks,
-                                scroll,
-                                self.center_x,
-                                self.center_y,
-                                s,
-                                self.transform,
-                            )
-                        } else {
-                            Action::None
-                        }
+                        Action::None
                     } else {
                         // Stay in Moving until lift, slip-back, or
                         // swept-angle threshold.
@@ -241,7 +226,9 @@ impl Fsm {
                 Action::None
             }
             (FsmState::Scrolling { .. }, true, Some(s)) => {
-                detector.push_if_moved(s);
+                if !detector.push_if_moved(s) {
+                    return Action::None;
+                }
                 let ticks = detector.step(scroll.sensitivity);
                 if ticks != 0 {
                     emit(

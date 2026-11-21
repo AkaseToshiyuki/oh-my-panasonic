@@ -477,6 +477,7 @@ class App(Adw.Application):
             card=self.card(page,'充电保养')
             self.updaters.append(lambda c=card:c.set_visible(bool(self.get('care','supported'))))
             self.stat(card,'服务状态',lambda:self.get('care','label') or '等待服务')
+            self.stat(card,'上次离线限充',lambda:{'suspend-held':'挂起前已暂停充电','poweroff-held':'关机前已暂停充电','skipped-no-supply':'未检测到外接电源或电池','failed':'执行失败'}.get(self.get('care','last_transition')))
             self.slider(card,'充电上限',lambda:self.get('care','config','limit') if self.get('care','supported') else None,['/usr/bin/pkexec','/usr/libexec/pou-adjust','battery-limit'],50,100)
             self.actions(card,[('立刻充满',lambda:self.control('battery','full')),
                                (lambda:'使用软件电源管理' if self.get('care','config','mode')=='system' else '恢复系统电池管理',
@@ -494,8 +495,10 @@ class App(Adw.Application):
             card=self.card(page,'性能预设')
             self.updaters.append(lambda c=card:c.set_visible(bool(self.get('power','presets'))))
             self.stat(card,'当前预设',self.mode)
-            self.stat(card,'长期功率上限',lambda:fmt(self.get('power','pl1_w'),' W'))
-            self.stat(card,'短时功率上限',lambda:fmt(self.get('power','pl2_w'),' W'))
+            self.stat(card,'待恢复预设',lambda:(self.get('power','presets',self.get('power','requested_mode'),'label') or MODES.get(self.get('power','requested_mode'))) if self.get('power','retry_pending') else None)
+            self.stat(card,'本档可用长期上限',lambda:fmt(self.get('power','maximum_w'),' W') if self.get('power','mode') in ('adaptive','boost') else None)
+            self.stat(card,'当前长期限值',lambda:fmt(self.get('power','pl1_w'),' W'))
+            self.stat(card,'当前短时限值',lambda:fmt(self.get('power','pl2_w'),' W'))
             self.stat(card,'处理器长期上限',lambda:fmt(self.get('power','processor_limits','pl1_w'),' W'))
             self.stat(card,'处理器短时上限',lambda:fmt(self.get('power','processor_limits','pl2_w'),' W'))
             self.stat(card,'温控目标',lambda:fmt(self.get('power','temperature_target'),' °C'))

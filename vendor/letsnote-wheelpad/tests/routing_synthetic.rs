@@ -353,6 +353,28 @@ fn same_slot_reuse_is_not_captured() {
 }
 
 #[test]
+fn stationary_frames_never_replay_the_last_arc() {
+    for direction in [1.0, -1.0] {
+        let mut harness = Harness::new(empty_snapshot());
+        start_and_engage(&mut harness);
+        let mut angle = PI / 8.0;
+        for _ in 0..2 {
+            let mut emitted = false;
+            for _ in 0..32 {
+                angle += direction * PI / 12.0;
+                emitted |= harness.process(snapshot_a(angle), frame(Vec::new()), false) != Action::None;
+            }
+            assert!(emitted);
+            for i in 0..128 {
+                let jitter = if i % 2 == 0 { 0.01 } else { 0.0 };
+                assert_eq!(harness.process(snapshot_a(angle + jitter), frame(Vec::new()), i % 2 == 0), Action::None);
+            }
+        }
+        assert_eq!(harness.process(empty_snapshot(), frame(Vec::new()), true), Action::None);
+    }
+}
+
+#[test]
 fn stationary_captured_contact_survives_liveness_reconciliation() {
     let mut harness = Harness::new(empty_snapshot());
     start_and_engage(&mut harness);

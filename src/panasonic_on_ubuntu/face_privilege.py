@@ -1,6 +1,6 @@
 """One local privilege request, one compositor confirmation, one fresh IR match."""
 from contextlib import contextmanager
-import fcntl
+from .private_lock import private_lock
 import json
 import os
 from pathlib import Path
@@ -49,7 +49,7 @@ def set_option(uid, service, enable):
         dest.unlink(missing_ok=True)
 
 
-def edit_hooks(enable, services=SERVICES):
+def edit_hooks(enable, services=SERVICES, upgrade=False):
     # Respect vendor PAM files and retain unrelated administrator edits.
     import tempfile
     for service in services:
@@ -61,7 +61,9 @@ def edit_hooks(enable, services=SERVICES):
         original = source.read_text()
         clean = ''.join(l for l in original.splitlines(keepends=True) if l != HOOK)
         if enable:
-            if clean.count('@include common-auth\n') != 1:
+            if not effective_policy(service, clean) or clean.count('@include common-auth\n') != 1:
+                if upgrade:
+                    continue
                 raise RuntimeError(f'{service} 的 PAM 配置需要手动检查。')
             clean = clean.replace('@include common-auth\n', HOOK + '@include common-auth\n')
         if clean == original:
@@ -141,8 +143,7 @@ def consent_channel(uid):
     RUN.mkdir(mode=0o755, exist_ok=True)
     path = RUN/f'consent-{uid}.sock'
     pending = path.with_suffix('.pending')
-    with (RUN/f'consent-{uid}.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with private_lock(f'consent-{uid}', timeout=0):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             pending.unlink(missing_ok=True)
             try:
@@ -212,7 +213,7 @@ def confirmed_match(request, parent, send, live=lambda:True):
     if uid < 1000 or service not in SERVICES or service not in preferences(uid) or not face.enabled(user):
         return False
     sid = face.active_session(uid,False)
-    if not sid or not standard_password_stack():
+    if not sid or not effective_policy(service, require_hook=True):
         return False
     detail = sudo_command(uid, parent, request['tty']) if service == 'sudo' else ''
     if service == 'sudo' and not detail:
@@ -246,12 +247,64 @@ def confirmed_match(request, parent, send, live=lambda:True):
                 send(message='正在尝试人脸识别，请正对摄像头。')
                 matched = face.authenticate(user.pw_name).returncode == 0
                 return bool(matched and live() and face.enabled(user) and service in preferences(uid)
-                            and face.active_session(uid,False) == sid)
+                            and face.active_session(uid,False) == sid and effective_policy(service, require_hook=True))
     return False
 
-def standard_password_stack():
+def effective_policy(service, text=None, directory=None, require_hook=False):
+    if service not in (*SERVICES, 'gdm-password'):
+        return False
+    directory = directory or Path('/etc/pam.d')
+    def contents(name):
+        local = directory / name
+        if local.is_file() or directory != Path('/etc/pam.d'):
+            return local.read_text()
+        return (Path('/usr/lib/pam.d') / name).read_text()
+
+    def rules(content):
+        result = []
+        for row in content.splitlines():
+            row = ' '.join(row.partition('#')[0].split())
+            if not row:
+                continue
+            if '\\' in row:
+                raise ValueError('Unsupported PAM syntax')
+            if row.split()[0].removeprefix('-') in ('session','account','password'):
+                continue
+            result.append(row)
+        return result
+
     try:
-        lines = [line.split('#',1)[0].strip() for line in Path('/etc/pam.d/common-auth').read_text().splitlines()]
+        if not standard_password_stack(contents('common-auth')):
+            return False
+        auth = []
+        for line in rules(text if text is not None else contents(service)):
+            if line in ('@include common-account','@include common-password','@include common-session',
+                        '@include common-session-noninteractive'):
+                if rules(contents(line.split()[1])):
+                    return False
+            else:
+                auth.append(line)
+        anchor = '@include common-auth'
+        if auth.count(anchor) != 1:
+            return False
+        pos = auth.index(anchor)
+        hooks = (face.HOOK.strip(), face.OLD_HOOK.strip()) if service == 'gdm-password' else (HOOK.strip(),)
+        if pos and auth[pos-1] in hooks:
+            auth.pop(pos-1)
+        elif require_hook:
+            return False
+        if service != 'gdm-password':
+            return auth == [anchor]
+        allowed_pre = ['auth requisite pam_nologin.so', 'auth required pam_succeed_if.so user != root quiet_success']
+        pre, post = auth[:auth.index(anchor)], auth[auth.index(anchor)+1:]
+        return pre == [x for x in allowed_pre if x in pre] and post in ([], ['auth optional pam_gnome_keyring.so'])
+    except (OSError, ValueError, UnicodeError):
+        return False
+
+
+def standard_password_stack(content=None):
+    try:
+        lines = [line.split('#',1)[0].strip() for line in (Path('/etc/pam.d/common-auth').read_text() if content is None else content).splitlines()]
     except OSError:
         return False
     active = [' '.join(line.split()) for line in lines if line]
@@ -268,7 +321,7 @@ def standard_password_stack():
 
 def configure(uid, service, enable):
     if enable:
-        if not standard_password_stack():
+        if not effective_policy(service):
             raise RuntimeError('当前账户使用自定义认证策略。')
         edit_hooks(True,(service,))
     set_option(uid, service, enable)

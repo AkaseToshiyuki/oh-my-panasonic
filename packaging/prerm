@@ -35,5 +35,5 @@ case "$1" in
         if dpkg --compare-versions "$2" lt 0.16.2; then
             /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face import upgrade_hook; upgrade_hook(rollback=True)'
         fi
-        systemctl stop pou-optical.service pou-wheelpad.service pou-power.service pou-battery.service || true ;;
+        ;;
 esac

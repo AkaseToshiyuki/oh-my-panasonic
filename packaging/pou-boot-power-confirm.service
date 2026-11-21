@@ -6,5 +6,5 @@ ConditionPathExists=/var/lib/oh-my-panasonic/boot-unlock/enabled
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/pou-boot-power confirm --apply
-TimeoutStartSec=45
+TimeoutStartSec=75
 UMask=0077

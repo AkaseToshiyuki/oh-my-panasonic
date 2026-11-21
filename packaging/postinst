@@ -1,6 +1,39 @@
 #!/bin/sh
 set -e
+tx=/var/lib/oh-my-panasonic/driver-upgrade
+recover_services() {
+    if [ -f "$tx/services" ]; then
+        while read -r unit; do
+            case "$unit" in pou-power|pou-optical|pou-battery|pou-wheelpad) systemctl start "$unit" || return 1;; esac
+        done <"$tx/services"
+    fi
+}
+start_service() {
+    if [ -f "$tx/services" ]; then
+        if grep -Fxq "$1" "$tx/services"; then systemctl restart "$1.service"; fi
+    else
+        systemctl enable "$1.service"
+        systemctl restart "$1.service"
+    fi
+}
+rollback_upgrade() {
+    code=$?
+    trap - EXIT
+    if [ "$code" -ne 0 ]; then
+        if [ -f "$tx/switch.json" ]; then
+            systemctl stop pou-power pou-optical pou-battery || true
+        fi
+        /usr/bin/python3 -I -m panasonic_on_ubuntu.hardware rollback || echo "DKMS rollback incomplete" >&2
+        recover_services || echo "Service recovery incomplete" >&2
+    fi
+    exit "$code"
+}
+if [ "$1" = abort-upgrade ]; then
+    /usr/bin/python3 -I -m panasonic_on_ubuntu.hardware rollback
+    recover_services
+fi
 if [ "$1" = configure ]; then
+    trap rollback_upgrade EXIT
     systemd-sysusers /usr/lib/sysusers.d/pou-input.conf
     systemctl daemon-reload
     systemctl stop pou-power.service pou-battery.service pou-optical.service || true
@@ -9,18 +42,20 @@ if [ "$1" = configure ]; then
     udevadm control --reload-rules || true
     gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
     systemctl enable --now pou-face-broker.socket
-    systemctl enable pou-power.service
     /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.legacy_io import retire; retire()'
-    systemctl restart pou-power.service
-    systemctl enable pou-optical.service
-    systemctl restart pou-optical.service
-    systemctl enable pou-battery.service
+    start_service pou-power
+    start_service pou-optical
     /usr/bin/python3 -I -m panasonic_on_ubuntu.care upgrade-defaults
     /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face import upgrade_hook; upgrade_hook()'
-    /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face_privilege import selected_services,edit_hooks; edit_hooks(True,selected_services())'
-    systemctl restart pou-battery.service
+    /usr/bin/python3 -I -c 'from panasonic_on_ubuntu.face_privilege import selected_services,edit_hooks; edit_hooks(True,selected_services(),upgrade=True)'
+    start_service pou-battery
     if [ -f /etc/panasonic-on-ubuntu/enabled ]; then
-        /usr/libexec/pou-control enable
-        systemctl restart pou-wheelpad.service
+        if [ -z "$2" ]; then /usr/libexec/pou-control enable; fi
+        start_service pou-wheelpad
     fi
+    if [ -e /var/lib/oh-my-panasonic/boot-unlock/enabled ]; then
+        /usr/bin/pou-boot-power adopt-mirror --apply || echo "Existing boot backup could not be verified" >&2
+    fi
+    /usr/bin/python3 -I -m panasonic_on_ubuntu.hardware finish
+    trap - EXIT
 fi

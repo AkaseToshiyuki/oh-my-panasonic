@@ -2,6 +2,24 @@
 set -e
 systemctl daemon-reload || true
 udevadm control --reload-rules || true
+if [ "$1" = abort-upgrade ] || [ "$1" = failed-upgrade ]; then
+    tx=/var/lib/oh-my-panasonic/driver-upgrade
+    if [ -d "$tx" ]; then
+        # At unpack time either version of the Python helper can be present.
+        for src in "$tx"/pou-firmware-* "$tx"/pou-sr3-fan-*; do
+            [ -f "$src/dkms.conf" ] || continue
+            case "$src" in *.partial) continue ;; esac
+            base=${src##*/}
+            if [ ! -e "/usr/src/$base" ]; then cp -a "$src" "/usr/src/$base"; fi
+        done
+        if [ -f "$tx/switch.json" ]; then /usr/bin/python3 -I -m panasonic_on_ubuntu.hardware rollback; fi
+        if [ -f "$tx/services" ]; then
+            while read -r unit; do
+                case "$unit" in pou-power|pou-optical|pou-battery|pou-wheelpad) systemctl start "$unit";; esac
+            done <"$tx/services"
+        fi
+    fi
+fi
 if [ "$1" = remove ] || [ "$1" = purge ]; then
     udevadm trigger --subsystem-match=input || true
     udevadm trigger --subsystem-match=misc --sysname-match=uinput || true

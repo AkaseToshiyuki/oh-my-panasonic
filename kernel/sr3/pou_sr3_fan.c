@@ -333,5 +333,5 @@ module_init(pou_init);
 module_exit(pou_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AkaseToshiyuki");
-MODULE_VERSION("0.2.2");
+MODULE_VERSION("0.2.3");
 MODULE_DESCRIPTION("Guarded native fan control for validated Panasonic CF-SR3");

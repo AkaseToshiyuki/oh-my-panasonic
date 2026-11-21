@@ -533,8 +533,9 @@ export default class Panasonic extends Extension {
             this.stat('CPU 预设',()=>Object.keys(presets()).length?presetName(this.data.power?.mode):'');
             this.buttons(presetButtons(['eco','balanced','performance']));
             this.buttons(presetButtons(['adaptive','boost','system']));
-            this.stat('长期功率上限',()=>fmt(this.data.power?.pl1_w,' W'));
-            this.stat('短时功率上限',()=>fmt(this.data.power?.pl2_w,' W'));
+            this.stat('本档可用长期上限',()=>['adaptive','boost'].includes(this.data.power?.mode)?fmt(this.data.power.maximum_w,' W'):'');
+            this.stat('当前长期限值',()=>fmt(this.data.power?.pl1_w,' W'));
+            this.stat('当前短时限值',()=>fmt(this.data.power?.pl2_w,' W'));
             this.stat('处理器长期上限',()=>fmt(this.data.power?.processor_limits?.pl1_w,' W'));
             this.stat('处理器短时上限',()=>fmt(this.data.power?.processor_limits?.pl2_w,' W'));
             this.stat('温控目标',()=>fmt(this.data.power?.temperature_target,' °C'));

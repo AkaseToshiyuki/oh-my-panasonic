@@ -53,6 +53,17 @@ def replace_poses(db, user, original, candidate):
         db.execute('UPDATE face_embeddings SET embedding=? WHERE id=?',(blob,key))
 
 
+def staged_config(text, path, storage):
+    lines = text.splitlines()
+    if lines.count('[storage]') != 1 or tomllib.loads(text).get('storage') != {}:
+        raise ValueError('无法确认临时模板库')
+    import json
+    lines.insert(lines.index('[storage]') + 1, 'db_path = ' + json.dumps(str(storage)))
+    path.write_text('\n'.join(lines) + '\n')
+    if tomllib.loads(path.read_text()).get('storage') != {'db_path': str(storage)}:
+        raise ValueError('临时模板库校验失败')
+
+
 def supplement(user, sid):
     text = CONFIG.read_text()
     config = tomllib.loads(text)
@@ -72,7 +83,7 @@ def supplement(user, sid):
             stage = Path(temporary)
             storage = stage/'facelock.db'
             cfg = stage/'config.toml'
-            cfg.write_text(text.replace('[storage]\n',f'[storage]\ndb_path = "{storage}"\n',1))
+            staged_config(text, cfg, storage)
             backend = [face.BACKEND,'--config',str(cfg)]
             face.progress('capture',0)
             face.guided_command([*backend,'-vv','enroll','--skip-setup-check','-u',name,'-l',face.LABEL],70,True)

@@ -34,12 +34,12 @@ def devices():
         if (device/'wireless').exists():
             try:state=wifi_state(device.name)
             except (OSError,subprocess.TimeoutExpired):state=None
-            if state is not None:found['wifi:'+device.name]=dict(kind='wifi',name=device.name,value=state)
+            if state is not None:found['wifi:'+device.name]=dict(kind='wifi',name=device.name,value=state,identity=str((device/'device').resolve()))
     for device in Path('/sys/class/nvme').glob('nvme[0-9]*'):
         if not re.fullmatch(r'nvme\d+',device.name):continue
         path=device/'power/pm_qos_latency_tolerance_us'
         if path.exists():
-            found['nvme:'+device.name]=dict(kind='nvme',name=device.name,value=read(path),model=read(device/'model'))
+            found['nvme:'+device.name]=dict(kind='nvme',name=device.name,value=read(path),model=read(device/'model'),identity=read(device/'serial'))
     return found
 
 
@@ -62,7 +62,11 @@ def restore():
     current=devices()
     remaining={}
     for key,item in baseline.items():
-        if key not in current:continue
+        if key not in current or current[key]['value'] is None:
+            remaining[key]=item
+            continue
+        if item.get('identity') and item['identity'] != current[key].get('identity'):
+            continue
         if current[key]['value']!=item.get('last'):continue
         try:write(current[key],item['original'])
         except (OSError,RuntimeError,ValueError,subprocess.SubprocessError):remaining[key]=item
@@ -91,6 +95,8 @@ class Controller:
         self.previous=None
         self.previous_request=None
         self.next_refresh=0
+        self.retry_after=0
+        self.retry_key=None
         self.error=''
         self.baseline={}
 
@@ -101,14 +107,17 @@ class Controller:
         if not changed and time.monotonic()<self.next_refresh:return
         self.next_refresh=time.monotonic()+20
         if changed:
+            if self.retry_key==(requested,mode) and time.monotonic()<self.retry_after:return
+            self.retry_key=(requested,mode)
+            self.retry_after=time.monotonic()+20
             restore();self.baseline={};self.error='';self.previous=mode;self.previous_request=requested
         found=devices()
         if mode!='system':
             errors=[]
             for key,item in found.items():
                 target=('on' if mode=='save' else 'off') if item['kind']=='wifi' else ('100000' if mode=='save' else '20000')
-                if item['value']==target:continue
-                baseline=self.baseline.setdefault(key,{'original':item['value'],'last':target})
+                if item['value'] is None or item['value']==target:continue
+                baseline=self.baseline.setdefault(key,{'original':item['value'],'last':target,'identity':item.get('identity')})
                 baseline['last']=target
                 save(BASELINE,self.baseline,0o600)
                 try:write(item,target)

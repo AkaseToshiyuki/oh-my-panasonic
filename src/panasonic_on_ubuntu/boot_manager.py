@@ -1,5 +1,7 @@
 """Provision, initialize and recover the optional SR3 boot power guard."""
 from pathlib import Path
+from .private_lock import private_lock
+import tempfile,uuid
 import argparse,dataclasses,hashlib,json,os,re,struct,subprocess,time
 from .boot_unlock import Backup,BootState,Phase,load_records,supported
 
@@ -19,12 +21,15 @@ def run(*args):
 
 def atomic(path,data,mode=0o600):
     path.parent.mkdir(parents=True,exist_ok=True)
-    temp=path.with_name(path.name+'.new')
-    fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,mode)
-    with os.fdopen(fd,'wb') as f:
-        os.fchmod(f.fileno(),mode)
-        f.write(data);f.flush();os.fsync(f.fileno())
-    temp.replace(path)
+    fd, name = tempfile.mkstemp(dir=path.parent)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd,'wb') as f:
+            os.fchmod(f.fileno(),mode)
+            f.write(data);f.flush();os.fsync(f.fileno())
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
     fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
     try:os.fsync(fd)
     finally:os.close(fd)
@@ -61,14 +66,80 @@ def mount_device():
     if not (ESP/'EFI/ubuntu/shimx64.efi').is_file():raise RuntimeError('缺少原 Ubuntu 启动程序')
     return str(Path('/dev')/parent),str(part)
 
+def mounted_partition():
+    source = run('findmnt','-no','SOURCE','--target',str(ESP)).strip()
+    device = Path(source).resolve(strict=True)
+    number = int((Path('/sys/class/block')/device.name/'partition').read_text())
+    partuuid = uuid.UUID(run('lsblk','-dnro','PARTUUID',str(device)).strip())
+    identifiers = run('lsblk','-nro','PARTUUID').lower().split()
+    if identifiers.count(str(partuuid)) != 1:
+        raise ValueError('EFI 分区标识不唯一')
+    return number, partuuid
+
+
+def verify_entry(blob, loader, partition, options=None):
+    def invalid():
+        raise ValueError('EFI 启动项与挂载分区不匹配')
+    if len(blob) < 10:
+        invalid()
+    flags, length = struct.unpack_from('<IH',blob)
+    if flags & 1 == 0:
+        invalid()
+    pos = 6
+    while pos+2 <= len(blob) and blob[pos:pos+2] != b'\0\0':
+        pos += 2
+    pos += 2
+    end = pos + length
+    if end > len(blob) or options is not None and blob[end:] != options:
+        invalid()
+    nodes = []
+    while pos < end:
+        if pos + 4 > end:
+            invalid()
+        kind, sub, size = struct.unpack_from('<BBH',blob,pos)
+        if size < 4 or pos + size > end:
+            invalid()
+        nodes.append((kind,sub,blob[pos+4:pos+size]))
+        pos += size
+    if [(a,b) for a,b,_ in nodes] != [(4,1),(4,4),(127,255)] or nodes[-1][2]:
+        invalid()
+    hd, pathname = nodes[0][2], nodes[1][2]
+    if len(hd) != 38 or hd[-2:] != b'\x02\x02':
+        invalid()
+    if (struct.unpack_from('<I',hd)[0],uuid.UUID(bytes_le=hd[20:36])) != partition:
+        invalid()
+    if pathname.decode('utf-16-le').lower() != loader.lower() + '\0':
+        invalid()
+
+
+def owned_entry(entry):
+    mount_device()
+    if hashlib.sha256((DIRECTORY/'guard.efi').read_bytes()).hexdigest() != config()['image_sha256']:
+        raise ValueError('已安装的启动守卫校验失败')
+    verify_entry(variable(f'Boot{entry:04X}'), LOADER, mounted_partition(), ('--guard\0').encode('utf-16le'))
+
+
 def preflight():
     data=identity();mount_device()
     if variable('SecureBoot')!=b'\0':raise RuntimeError('当前需要关闭状态的 Secure Boot；不会自动修改此设置')
-    run('systemctl','is-active','--quiet','pou-power','pou-battery','thermald')
+    require_services()
     return data
 
+class HealthNotReady(RuntimeError):
+    pass
+
+def require_services():
+    units=('pou-power','pou-battery','thermald')
+    try:
+        states=run('systemctl','is-active',*units).splitlines()
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode!=3:raise
+        states=exc.stdout.splitlines()
+    if states!=['active']*len(units):
+        raise HealthNotReady('电源、电池或温控服务尚未就绪')
+
 def state_checked():
-    info=identity();state,backup=load_records(DIRECTORY)
+    info=identity();owned_entry(config()["entry"]);state,backup=load_records(DIRECTORY)
     if (state.sku,state.bios)!=(info['product_sku'],info['bios_version']):
         raise RuntimeError('固件身份已变化，未执行启动功耗写入')
     return state,backup
@@ -91,9 +162,7 @@ def enable():
     if len(original_order)%2 or len(original_order)>128:raise RuntimeError('启动顺序格式不受支持')
     current=struct.unpack('<H',variable('BootCurrent'))[0]
     current_blob=variable(f'Boot{current:04X}')
-    if '\\EFI\\ubuntu\\shimx64.efi'.lower().encode('utf-16le') not in current_blob.lower():
-        # ASCII lowercasing is valid for this fixed UTF-16LE path.
-        raise RuntimeError('当前启动项不是已验证的 Ubuntu shim')
+    verify_entry(current_blob, r'\EFI\ubuntu\shimx64.efi', mounted_partition())
     DIRECTORY.mkdir(mode=0o700);STORE.mkdir(parents=True,exist_ok=True,mode=0o700);STORE.chmod(0o700)
     number=None
     try:
@@ -107,8 +176,7 @@ def enable():
         if len(created)!=1:raise RuntimeError('无法确定新建的启动项')
         number=int(created.pop().name[4:8],16)
         blob=variable(f'Boot{number:04X}')
-        if LOADER.encode('utf-16le') not in blob or not blob.endswith(options.read_bytes()):
-            raise RuntimeError('启动项读回不一致')
+        verify_entry(blob, LOADER, mounted_partition(), options.read_bytes())
         record(STORE/'installation.json',{'identity':info,'entry':number,'original_order':original_order.hex(),
             'image_sha256':hashlib.sha256(image).hexdigest(),'installed_at':time.time()})
         atomic(STORE/'enabled',b'1\n')
@@ -132,6 +200,43 @@ def enable():
 def save_phase(state,phase):
     atomic(DIRECTORY/'state.bin',dataclasses.replace(state,phase=phase).encode())
 
+def mirror_backup(state, backup):
+    atomic(STORE/'original.bin', backup.encode())
+    record(STORE/'backup-generation.json', dict(generation=state.generation,
+           digest=hashlib.sha256(backup.encode()).hexdigest()))
+
+
+def repair_backup():
+    info = identity()
+    entry = config()['entry']
+    owned_entry(entry)
+    if (VARIABLES/('BootNext-'+GLOBAL)).exists() and variable('BootNext') != struct.pack('<H',entry):
+        raise RuntimeError('已有其他待执行启动项')
+    state = BootState.decode((DIRECTORY/'state.bin').read_bytes())
+    if (state.sku,state.bios) != (info['product_sku'],info['bios_version']):
+        raise ValueError('固件身份不匹配')
+    mirror = Backup.decode((STORE/'original.bin').read_bytes())
+    state.validate_backup(mirror)
+    receipt = json.loads((STORE/'backup-generation.json').read_text())
+    if receipt != dict(generation=state.generation,digest=hashlib.sha256(mirror.encode()).hexdigest()):
+        raise ValueError('备份代次不匹配')
+    try:
+        existing = Backup.decode((DIRECTORY/'original.bin').read_bytes())
+    except (ValueError,FileNotFoundError):
+        atomic(DIRECTORY/'original.bin',mirror.encode())
+    else:
+        state.validate_backup(existing)
+    load_records(DIRECTORY)
+
+
+def adopt_mirror():
+    if not (STORE/'enabled').exists():
+        return
+    state, backup = state_checked()
+    if state.generation and (STORE/'original.bin').is_file() and (STORE/'original.bin').read_bytes() == backup.encode():
+        mirror_backup(state, backup)
+
+
 def disable():
     # Recovery must remain available when a service health check has failed.
     identity();mount_device();entry=config()['entry']
@@ -151,11 +256,43 @@ def disable():
     run('efibootmgr','-n',f'{entry:04X}');publish('restore-pending')
     print('已安排恢复原始功耗上限；下次启动会恢复并自动重启一次。')
 
+def cleanup_after_firmware_change():
+    from .boot_unlock import stock_cpu
+    current = identity()
+    receipt = config()
+    previous = receipt['identity']
+    if (current['product_sku'] != previous['product_sku'] or current['product_name'] != previous['product_name']
+            or current['bios_version'] == previous['bios_version']):
+        raise ValueError('没有匹配的固件升级记录')
+    state,backup = load_records(DIRECTORY)
+    if (state.sku,state.bios) != (previous['product_sku'],previous['bios_version']):
+        raise ValueError('历史身份不匹配')
+    owned_entry(receipt['entry'])
+    if (hashlib.sha256((DIRECTORY/'guard.efi').read_bytes()).hexdigest() != receipt['image_sha256']
+            or (STORE/'original.bin').read_bytes() != backup.encode()):
+        raise ValueError('历史文件不匹配')
+    if (VARIABLES/('BootNext-'+GLOBAL)).exists():
+        raise ValueError('存在待执行启动项')
+    boot = struct.unpack('<H',variable('BootCurrent'))[0]
+    verify_entry(variable(f'Boot{boot:04X}'),r'\EFI\ubuntu\shimx64.efi',mounted_partition())
+    cpu = (VARIABLES/'CpuSetup-b08f97ff-e6e8-4193-a997-5e9e9b0adb32').read_bytes()
+    if cpu[:4] != struct.pack('<I',7) or not stock_cpu(cpu[4:]) or msr_limit() != 0x804281b800dd80e0:
+        raise ValueError('原厂功耗配置尚未确认')
+    remove_entry(receipt['entry'])
+    (STORE/'enabled').unlink(missing_ok=True)
+    for name in ('guard.efi','state.bin','original.bin','last-boot.txt'):
+        (DIRECTORY/name).unlink(missing_ok=True)
+    if not any(DIRECTORY.iterdir()):
+        DIRECTORY.rmdir()
+    (RUNTIME/'boot-power-envelope.json').unlink(missing_ok=True)
+    publish('disabled')
+
+
 def remove_entry(entry):
     name=f'Boot{entry:04X}'
     try:
         blob=variable(name)
-        if LOADER.encode('utf-16le') not in blob:raise RuntimeError('启动项已被其他程序修改')
+        verify_entry(blob, LOADER, mounted_partition(), ('--guard\0').encode('utf-16le'))
         try:
             if variable('BootNext')==struct.pack('<H',entry):run('efibootmgr','-N')
         except FileNotFoundError:pass
@@ -179,7 +316,11 @@ def normalize_mmio(base):
     names=('enabled','constraint_0_power_limit_uw','constraint_1_power_limit_uw')
     before={n:(base/n).read_text().strip() for n in names}
     target=dict(zip(names,('1','28000000','55000000')))
-    if before==target:return {'before':before,'after':before,'changed':False}
+    if before == target:
+        windows = [(base/f'constraint_{i}_time_window_us').read_text().strip() for i in (0,1)]
+        if windows != ['27983872','1952']:
+            raise RuntimeError('已启用的 MMIO 时间窗口不匹配')
+        return {'before':before,'after':before,'changed':False}
     if before['enabled']!='0' or before[names[1]] not in ('0','35000000') or before[names[2]]!='0':
         raise RuntimeError('启动 MMIO 初值不在已验证范围')
     window_paths=[base/f'constraint_{i}_time_window_us' for i in (0,1)]
@@ -218,7 +359,7 @@ def initialize():
     result=normalize_mmio(RAPL)
     if state.phase!=Phase.BOOT_PENDING or variable('BootCurrent')!=struct.pack('<H',config()['entry']):
         raise RuntimeError('本次启动未经过守卫，保留 28W 初始限制')
-    atomic(STORE/'original.bin',backup.encode())
+    mirror_backup(state,backup)
     record(atom,{'boot_id':boot_id(),'generation':state.generation,'sku':state.sku,'bios':state.bios,
         'pl1_w':35,'pl2_w':55,'baseline_pl1_w':28,'baseline_pl2_w':55,'initialization':result})
     publish('awaiting-health')
@@ -232,18 +373,39 @@ def confirm():
     if envelope['boot_id']!=boot_id() or envelope['generation']!=state.generation:
         raise RuntimeError('启动健康记录不匹配')
     if msr_limit()!=0x804281b800dd8118:raise RuntimeError('处理器限制发生变化')
-    run('systemctl','is-active','--quiet','pou-power','pou-battery','thermald')
-    power=json.loads((RUNTIME/'power.json').read_text());care=json.loads((RUNTIME/'battery-care.json').read_text())
+    require_services()
+    try:
+        power=json.loads((RUNTIME/'power.json').read_text())
+        care=json.loads((RUNTIME/'battery-care.json').read_text())
+    except FileNotFoundError as exc:
+        raise HealthNotReady('等待服务首次采样') from exc
     sample=power.get('sample') or {}
     if (not 0<=time.time()-power['timestamp']<10 or not 0<=time.time()-care['timestamp']<10
-            or power.get('error') or care.get('error') or power.get('fan',{}).get('error')
-            or not 0<=time.monotonic()-sample.get('received',0)<8
-            or not 0<sample.get('temperature',0)<85
+            or not sample.get('received') or not 0<=time.monotonic()-sample['received']<8):
+        raise HealthNotReady('等待最新电源与温度采样')
+    if (care.get('error') or power.get('fan',{}).get('error')
+            or not 0<(sample.get('temperature') or 0)<85
             or power.get('presets',{}).get('adaptive',{}).get('cutoff_c')!=85):
         raise RuntimeError('系统服务健康检查未通过，下次启动将回退')
+    if power.get('profile_retry_pending') is True:
+        raise HealthNotReady('等待系统电源配置服务就绪')
+    if power.get('retry_pending') or power.get('error'):
+        raise RuntimeError('电源策略健康检查未通过，下次启动将回退')
     current=BootState.decode((DIRECTORY/'state.bin').read_bytes())
     if current!=state:raise RuntimeError('启动事务在检查期间变化')
     save_phase(state,Phase.ACTIVE);publish('active')
+
+def confirm_when_ready(locked=False):
+    deadline=time.monotonic()+60
+    while True:
+        try:
+            if locked:
+                with private_lock('boot'):
+                    return confirm()
+            return confirm()
+        except HealthNotReady:
+            if time.monotonic()>=deadline:raise
+            time.sleep(2)
 
 def removal_check():
     if (STORE/'enabled').exists():
@@ -251,15 +413,20 @@ def removal_check():
 
 def main():
     p=argparse.ArgumentParser(description='Oh My Panasonic 可恢复启动功耗控制')
-    p.add_argument('action',choices=('status','enable','disable','initialize','confirm','removal-check'),nargs='?',default='status')
+    p.add_argument('action',choices=('status','enable','disable','initialize','confirm','removal-check','repair-backup','adopt-mirror','cleanup-after-firmware-change'),nargs='?',default='status')
     p.add_argument('--apply',action='store_true');a=p.parse_args()
     if a.action=='status':
         print((RUNTIME/'boot-unlock.json').read_text() if (RUNTIME/'boot-unlock.json').exists() else '{"phase":"disabled"}');return
     if not a.apply:p.print_help();return
     if os.geteuid()!=0:raise SystemExit('需要 root 权限')
-    actions={'enable':enable,'disable':disable,'initialize':initialize,'confirm':confirm,'removal-check':removal_check}
-    try:actions[a.action]()
+    actions={'cleanup-after-firmware-change':cleanup_after_firmware_change,'repair-backup':repair_backup,'adopt-mirror':adopt_mirror,'enable':enable,'disable':disable,'initialize':initialize,'confirm':confirm_when_ready,'removal-check':removal_check}
+    try:
+        if a.action == 'confirm':
+            confirm_when_ready(locked=True)
+        else:
+            with private_lock('boot'):
+                actions[a.action]()
     except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as error:
-        publish('error',str(error));raise SystemExit(str(error))
+        raise SystemExit(str(error))
 
 if __name__=='__main__':main()

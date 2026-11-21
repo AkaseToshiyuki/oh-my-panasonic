@@ -5,6 +5,18 @@ from panasonic_on_ubuntu import hardware
 
 
 class HardwareTests(unittest.TestCase):
+    def test_pending_bootable_kernel_with_headers_is_also_built(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            for release in ('current','next','no-headers'):
+                (root/('vmlinuz-'+release)).touch()
+            for release in ('current','next','removed'):
+                headers=root/release/'build'
+                headers.mkdir(parents=True)
+                (headers/'Makefile').touch()
+            self.assertEqual(hardware.kernel_targets('current',root,root),['current','next'])
+
     def test_selection_and_narrow_battery_gate(self):
         sv7={'product_name':'CFSV7-3L','bios_version':'V3.11L22','product_sku':'CF-SV7HD9VS'}
         self.assertEqual(hardware.selection(sv7),('sv7',['pou_firmware','pou_battery']))
@@ -24,7 +36,7 @@ class HardwareTests(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
             load=Path(directory)/'modules.conf'
-            with patch.object(hardware,'LOAD',load),patch.object(hardware,'selection',return_value=('sr3',['pou_sr3_fan','pou_battery'])),patch.object(hardware,'registered',return_value=False),patch.object(hardware,'unload'),patch.object(hardware,'run') as run:
+            with patch.object(hardware,'TX',Path(directory)/'transaction'),patch.object(hardware,'LOAD',load),patch.object(hardware,'selection',return_value=('sr3',['pou_sr3_fan','pou_battery'])),patch.object(hardware,'registered',return_value=False),patch.object(hardware,'unload'),patch.object(hardware,'run') as run:
                 hardware.install()
             self.assertEqual(load.read_text(),'pou_sr3_fan\npou_battery\n')
             self.assertIn(call('modprobe','pou_sr3_fan'),run.call_args_list)

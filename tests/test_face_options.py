@@ -56,7 +56,7 @@ class PrivilegeTests(unittest.TestCase):
             thread=threading.Thread(target=respond);thread.start()
         with (
             left,
-            patch.object(auth,'standard_password_stack',return_value=True),
+            patch.object(auth,'effective_policy',return_value=True),
             patch.object(auth.pwd,'getpwnam',return_value=fake),
             patch.object(auth,'preferences',return_value=['sudo']),
             patch.object(auth.face,'enabled',return_value=True),

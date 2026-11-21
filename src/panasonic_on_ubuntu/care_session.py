@@ -40,8 +40,5 @@ class Session:
         self.record = dict(wall=now, boot_id=self.boot_id, boot_seconds=self.boot_seconds,
                            ac_since=state.get('ac_since')) if valid and 'ac_since' in state else {}
         # This heartbeat lives on /run, not on the SSD; it is invalid after boot.
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix('.new')
-        tmp.write_text(json.dumps(self.record))
-        tmp.chmod(0o600)
-        tmp.replace(self.path)
+        from .care import atomic
+        atomic(self.path, self.record)

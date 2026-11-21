@@ -26,7 +26,7 @@ class ManagementTests(unittest.TestCase):
                 return value if path==config else {'request_id':value['request_id'],'timestamp':time.time(),'phase':'system' if value['mode']=='system' else 'holding','error':''}
             def open_file(path,*args,**kwargs):
                 return builtins.open(root/'control.lock' if str(path)=='/run/lock/pou-battery-control.lock' else path,*args,**kwargs)
-            with patch.dict(main.__globals__,BASE=root,open=open_file), \
+            with patch.dict(main.__globals__,BASE=root,private_lock=lambda name: builtins.open(root/"control.lock","a")), \
                     patch.multiple(care,CONFIG=config,RUNTIME=runtime,FIRMWARE=firmware,load=load), \
                     patch('os.geteuid',return_value=0),patch('socket.socket'):
                 for mode in ('system','care'):

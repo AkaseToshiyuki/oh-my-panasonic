@@ -1,5 +1,5 @@
 """Opt-in face authentication for local GDM login and locked GNOME sessions."""
-import fcntl
+from panasonic_on_ubuntu.private_lock import private_lock
 import json
 import os
 from pathlib import Path
@@ -70,10 +70,23 @@ def loginctl_session(uid, locked):
     return sid if data.get('Type') in ('x11','wayland') and all(data.get(k)==v for k,v in wanted.items()) else None
 
 
+def local_account(user):
+    try:
+        for line in Path('/etc/passwd').read_text().splitlines():
+            parts = line.split(':')
+            if len(parts) == 7 and parts[0] == user.pw_name:
+                return parts[2] == str(user.pw_uid)
+    except (OSError, UnicodeError):
+        pass
+    return False
+
+
 def enabled(user):
     try:
         hooks = PAM.read_text().splitlines(keepends=True)
-        return (USERS/str(user.pw_uid)).read_text().strip() == user.pw_name and (HOOK in hooks or OLD_HOOK in hooks)
+        from .face_privilege import effective_policy
+        return (local_account(user) and (USERS/str(user.pw_uid)).read_text().strip() == user.pw_name and
+                effective_policy('gdm-password', ''.join(hooks), PAM.parent, require_hook=True))
     except OSError:
         return False
 
@@ -92,7 +105,8 @@ def edit_pam(enable, hook=HOOK):
     clean = ''.join(line for line in lines if line not in (HOOK, OLD_HOOK))
     if enable:
         anchor = '@include common-auth\n'
-        if clean.count(anchor) != 1:
+        from .face_privilege import effective_policy
+        if clean.count(anchor) != 1 or not effective_policy('gdm-password', clean, PAM.parent):
             raise RuntimeError('GDM 密码配置已自定义，未能启用解锁。')
         updated = clean.replace(anchor, hook + anchor)
     else:
@@ -119,10 +133,11 @@ def edit_pam(enable, hook=HOOK):
 def upgrade_hook(rollback=False):
     source, target = (HOOK, OLD_HOOK) if rollback else (OLD_HOOK, HOOK)
     if PAM.is_file() and source in PAM.read_text().splitlines(keepends=True):
-        with open('/run/lock/pou-face.lock','w') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX)
+        with private_lock('pou-face'):
             if source in PAM.read_text().splitlines(keepends=True):
-                edit_pam(True, target)
+                from .face_privilege import effective_policy
+                if effective_policy("gdm-password", directory=PAM.parent, require_hook=True):
+                    edit_pam(True, target)
 
 
 def gdm_worker_identity():
@@ -263,6 +278,19 @@ def models(user):
     return json.loads(call([BACKEND,'list','-u',user,'--json']).stdout)
 
 
+def management_allowed(user, action, marker):
+    if local_account(user):
+        return True
+    if action not in ('disable', 'forget', 'sudo-off', 'polkit-1-off'):
+        return False
+    try:
+        return marker.read_text().strip() == user.pw_name
+    except FileNotFoundError:
+        return action == 'forget'
+    except OSError:
+        return False
+
+
 def manage(action):
     from . import face_privilege as privilege
     choices = {f'{service}-{mode}':(service, mode=='on') for service in privilege.SERVICES for mode in ('on','off')}
@@ -275,8 +303,9 @@ def manage(action):
         raise RuntimeError('请在自己的已解锁桌面操作。')
     USERS.mkdir(mode=0o711, parents=True, exist_ok=True)
     marker = USERS/str(uid)
-    with open('/run/lock/pou-face.lock','w') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with private_lock('pou-face', timeout=0):
+        if not management_allowed(user, action, marker):
+            raise RuntimeError('此账户的认证策略仅允许移除已有录入。')
         if action in choices:
             service, allow = choices[action]
             if allow and not enabled(user):

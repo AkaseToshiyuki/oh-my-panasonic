@@ -10,6 +10,20 @@ def original():
     return bytes(data)
 
 class BootManagerTests(unittest.TestCase):
+    def test_confirmation_requires_each_service_to_be_active(self):
+        with patch.object(m,'run',return_value='active\ninactive\nactive\n'):
+            with self.assertRaises(m.HealthNotReady):m.require_services()
+
+    def test_retry_is_bounded_and_only_for_startup_readiness(self):
+        with patch.object(m,'confirm',side_effect=[m.HealthNotReady(),None]) as confirm,patch.object(m.time,'sleep'):
+            m.confirm_when_ready()
+            self.assertEqual(confirm.call_count,2)
+        with patch.object(m,'confirm',side_effect=m.HealthNotReady()),patch.object(m.time,'monotonic',side_effect=[0,60]):
+            with self.assertRaises(m.HealthNotReady):m.confirm_when_ready()
+        with patch.object(m,'confirm',side_effect=RuntimeError('thermal')),patch.object(m.time,'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError,'thermal'):m.confirm_when_ready()
+            sleep.assert_not_called()
+
     @unittest.skipUnless(os.name=='posix','POSIX file modes')
     def test_status_is_readable_with_restrictive_systemd_umask(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -77,13 +91,26 @@ class BootManagerTests(unittest.TestCase):
                 'presets':{'adaptive':{'cutoff_c':85}},'error':'','fan':{'error':''}}
             with patch.object(m,'STORE',root),patch.object(m,'RUNTIME',root),patch.object(m,'DIRECTORY',root), \
                  patch.object(m,'state_checked',return_value=(state,backup)),patch.object(m,'boot_id',return_value='test'), \
-                 patch.object(m,'msr_limit',return_value=0x804281b800dd8118),patch.object(m,'run'),patch.object(m,'publish'),patch.object(m,'save_phase') as save:
+                 patch.object(m,'msr_limit',return_value=0x804281b800dd8118),patch.object(m,'run',return_value='active\n'*3),patch.object(m,'publish'),patch.object(m,'save_phase') as save:
                 for invalid in ({'timestamp':0},{'error':'failure'},{'presets':{'adaptive':{'cutoff_c':95}}},
                                 {'sample':{'received':0,'temperature':40}},{'fan':{'error':'failure'}}):
                     (root/'power.json').write_text(json.dumps(status|invalid))
                     with self.assertRaises(RuntimeError):m.confirm()
                     save.assert_not_called()
-                (root/'power.json').write_text(json.dumps(status));m.confirm();save.assert_called_once_with(state,Phase.ACTIVE)
+                pending=status|{'error':'profile bus unavailable','profile_retry_pending':True}
+                for invalid in ({'sample':{'received':time.monotonic(),'temperature':85}}, {'fan':{'error':'failed'}}):
+                    (root/'power.json').write_text(json.dumps(pending|invalid))
+                    with self.assertRaises(RuntimeError) as result:m.confirm()
+                    self.assertNotIsInstance(result.exception,m.HealthNotReady)
+                    save.assert_not_called()
+                (root/'power.json').write_text(json.dumps(pending))
+                def profile_ready(_):
+                    save.assert_not_called()
+                    (root/'power.json').write_text(json.dumps(status))
+                with patch.object(m.time,'sleep',side_effect=profile_ready) as retry:
+                    m.confirm_when_ready()
+                    retry.assert_called_once_with(2)
+                save.assert_called_once_with(state,Phase.ACTIVE)
 
     def test_booting_original_ubuntu_entry_never_grants_35w(self):
         for phase in (Phase.ACTIVE,Phase.BOOT_PENDING):

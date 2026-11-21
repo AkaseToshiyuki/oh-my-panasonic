@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import tempfile
 import time
 from .diagnostics import StateLog
 
@@ -35,14 +36,33 @@ def load(path, default):
         return value if isinstance(value, dict) else dict(default)
     except (OSError, ValueError): return dict(default)
 
-def atomic(path, data, mode=0o600):
+def atomic(path, data, mode=0o600, gid=None):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name+'.new')
-    with temp.open('w') as out:
-        json.dump(data, out, ensure_ascii=False)
-        out.flush(); os.fsync(out.fileno())
-    temp.chmod(mode)
-    temp.replace(path)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name + '-')
+    try:
+        with os.fdopen(fd, 'w') as out:
+            json.dump(data, out, ensure_ascii=False)
+            out.flush()
+            if gid is not None:
+                os.fchown(out.fileno(), -1, gid)
+            os.fchmod(out.fileno(), mode)
+            os.fsync(out.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def save_prediction(prediction):
+    import grp
+    destination = RUNTIME.with_name('departure-prediction.json')
+    if not prediction:
+        destination.unlink(missing_ok=True)
+        return
+    try:
+        gid = grp.getgrnam('sudo').gr_gid
+    except KeyError:
+        gid = None
+    atomic(destination, prediction, 0o640 if gid is not None else 0o600, gid)
 
 def config_valid(value):
     result = {**DEFAULT, **value}
@@ -174,9 +194,13 @@ class Policy:
 
 def status():
     data = load(RUNTIME, {})
+    data['departure_prediction'] = load(RUNTIME.with_name('departure-prediction.json'), {}) or None
     data['supported'] = read(FIRMWARE/'interface_version') == '1'
     data['offline_capabilities'] = int(read(FIRMWARE/'offline_capabilities') or 0)
     data['stale'] = not data.get('timestamp') or not 0 <= time.time()-data['timestamp'] < 15
+    if (data['stale'] or not data.get('prediction_synced') or data.get('config',{}).get('mode') != 'care'
+            or (data['departure_prediction'] or {}).get('departure_at', 0) <= time.time()):
+        data['departure_prediction'] = None
     if data['stale']:
         data.update(phase='unsupported' if not data['supported'] else 'error', label='电池服务未运行', driver_mode=None)
     return data
@@ -268,6 +292,8 @@ def record_maintenance(state, output):
 
 
 def run():
+    previous_prediction = object()
+    prediction_retry_log = 0
     log = logging.getLogger('pou-battery-care'); log.setLevel(logging.INFO)
     LOG_DIR.mkdir(parents=True,exist_ok=True,mode=0o750)
     handler=RotatingFileHandler(LOG_DIR/'battery-care.log',maxBytes=1024*1024,backupCount=2)
@@ -338,11 +364,20 @@ def run():
             label = PHASES.get(policy.phase, policy.phase)
             if policy.phase == 'charging' and data.get('status') != 'Charging':
                 label = '等待充电'
+            prediction = data.pop('departure_prediction', None)
+            if prediction != previous_prediction:
+                try:
+                    save_prediction(prediction)
+                except OSError as exc:
+                    if now >= prediction_retry_log:
+                        log.warning('departure prediction write deferred: %s', exc)
+                        prediction_retry_log = now + 300
+                else:
+                    previous_prediction = prediction
             output={'timestamp':now,'config':{k:config[k] for k in DEFAULT},'phase':policy.phase,
                     'label':label,'error':error,'note':policy.reason,
                     'request_id':policy.state.get('request_id'),'driver_mode':driver,'sample':data,
                     'override_until':policy.state.get('override_until'),
-                    'departure_prediction':data.get('departure_prediction'),
                     'last_maintenance':policy.state.get('last_maintenance'),
                     'next_maintenance':policy.state.get('last_maintenance',now)+config['maintenance_days']*86400 if config['maintenance_days'] else None,
                     'sleep_hold':bool(int(read(FIRMWARE/'offline_capabilities') or 0) & 1) and offline_requested(config,policy.state,now,'sleep_hold'),
@@ -352,6 +387,8 @@ def run():
             serialized=json.dumps(policy.state,sort_keys=True)
             if serialized!=previous_state:
                 atomic(STATE,policy.state); previous_state=serialized
+            output['prediction_synced'] = prediction == previous_prediction
+            output['last_transition'] = read(FIRMWARE/'last_transition')
             atomic(RUNTIME,output,0o644)
             record_key = (output['phase'], error, output['request_id'], driver,
                           config['mode'], config['limit'], data.get('ac'), data.get('usb_online'))
@@ -370,9 +407,8 @@ def run():
 if __name__=='__main__':
     import sys
     if sys.argv[1:] == ['upgrade-defaults']:
-        import fcntl
-        with open('/run/lock/pou-battery-control.lock','w') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX)
+        from panasonic_on_ubuntu.private_lock import private_lock
+        with private_lock('pou-battery-control'):
             config = config_valid(load(CONFIG, DEFAULT))
             if config.get('care_defaults_version') != 2:
                 if not config['maintenance_days']:

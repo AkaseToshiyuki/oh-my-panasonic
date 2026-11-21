@@ -94,6 +94,7 @@ class FaceScopeTests(unittest.TestCase):
             pam=Path(directory)/'gdm-password'
             original='auth requisite pam_nologin.so\n@include common-auth\n'
             pam.write_text(original)
+            (pam.parent/"common-auth").write_text("auth [success=1 default=ignore] pam_unix.so nullok\nauth requisite pam_deny.so\nauth required pam_permit.so\n")
             with patch.object(face,'PAM',pam):
                 face.edit_pam(True)
                 face.edit_pam(True)

@@ -1,4 +1,5 @@
 """CF-SV7 optical power after complete optical-only AHCI driver teardown."""
+from panasonic_on_ubuntu.private_lock import private_lock
 import fcntl
 import json
 import logging
@@ -110,8 +111,7 @@ def switch(value):
     if not supported():
         raise RuntimeError('未检测到已验证的光驱独立断电接口')
     RUNTIME.mkdir(mode=0o755,exist_ok=True)
-    with open(RUNTIME/'optical.lock','w') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX)
+    with private_lock('optical'):
         if value=='on':
             audit('restoring optical power and driver')
             restore();audit('optical power restored');return

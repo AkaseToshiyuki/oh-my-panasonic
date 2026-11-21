@@ -1,11 +1,23 @@
 #!/bin/sh
-set -e
-# DKMS needs the old dkms.conf while removing an installed module version.
-# Do this before dpkg unpacks a package that replaces its /usr/src directory.
-if [ "$1" = upgrade ] && [ -f /usr/lib/python3/dist-packages/panasonic_on_ubuntu/hardware.py ]; then
-    systemctl stop pou-power.service pou-battery.service pou-optical.service || true
-    if ! /usr/bin/python3 -I -m panasonic_on_ubuntu.hardware remove; then
-        systemctl start pou-power.service pou-battery.service pou-optical.service || true
-        exit 1
+set -eu
+if [ "$1" = upgrade ]; then
+    tx=/var/lib/oh-my-panasonic/driver-upgrade
+    install -d -m 700 "$tx"
+    for src in /usr/src/pou-firmware-* /usr/src/pou-sr3-fan-*; do
+        [ -f "$src/dkms.conf" ] || continue
+        base=${src##*/}
+        if [ ! -d "$tx/$base" ]; then
+            install -d -m 700 "$tx/$base.partial"
+            cp -a "$src/." "$tx/$base.partial/"
+            mv "$tx/$base.partial" "$tx/$base"
+        fi
+    done
+    if [ ! -e "$tx/services" ]; then
+        for unit in pou-power pou-optical pou-battery pou-wheelpad; do
+            if systemctl is-active --quiet "$unit" || { dpkg --compare-versions "$2" lt 0.24.5 && systemctl is-enabled --quiet "$unit"; }; then
+                echo "$unit"
+            fi
+        done >"$tx/services.partial"
+        mv "$tx/services.partial" "$tx/services"
     fi
 fi

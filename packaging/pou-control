@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 """Small root helper. Fixed actions, fixed paths; never evaluates shell input."""
-import fcntl
+from panasonic_on_ubuntu.private_lock import private_lock
 import json
 import os
 from pathlib import Path
@@ -53,8 +53,7 @@ def main():
         if not isinstance(patch, dict) or not patch or patch.keys() - {'mode', 'percent', 'response', 'curve'}:
             raise ValueError('风扇设置无效')
         BASE.mkdir(mode=0o755, exist_ok=True)
-        with open('/run/lock/pou-control.lock', 'w') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with private_lock('pou-control'):
             data = validate({**configuration(), **patch})
             if data['mode'] != 'follow':
                 int((FIRMWARE / 'fan_feedback_percent').read_text())
@@ -81,8 +80,7 @@ def main():
         if read(BATTERY_FW/'interface_version') != '1' and args != ['battery','system']:
             raise RuntimeError('本机没有已验证的电池控制模块')
         BASE.mkdir(mode=0o755, exist_ok=True)
-        with open('/run/lock/pou-battery-control.lock','w') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX)
+        with private_lock('pou-battery-control'):
             config=config_valid(load(CONFIG,DEFAULT))
             config['action']='configure'
             if args[0]=='battery-limit':
@@ -131,8 +129,7 @@ def main():
         from panasonic_on_ubuntu import ssd_power
         if args[1] not in ssd_power.MODES:raise ValueError('SSD 电源策略无效')
         BASE.mkdir(mode=0o755, exist_ok=True)
-        with open('/run/lock/pou-control.lock','w') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with private_lock('pou-control'):
             request_id=uuid.uuid4().hex
             atomic('ssd-power.json', json.dumps({'mode':args[1], 'request_id':request_id}))
             run('/usr/bin/systemctl','start','pou-power.service')
@@ -151,8 +148,7 @@ def main():
     if args[0]=='peripherals':
         if args[1] not in ('follow','system','save','performance'):raise ValueError('Invalid peripheral policy')
         BASE.mkdir(mode=0o755,exist_ok=True)
-        with open('/run/lock/pou-control.lock','w') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX)
+        with private_lock('pou-control'):
             atomic('peripherals.json',json.dumps({'mode':args[1]}))
             run('/usr/bin/systemctl','start','pou-power.service')
             import time
@@ -189,8 +185,7 @@ def main():
             raise ValueError('Invalid optical policy')
         from panasonic_on_ubuntu.optical import switch
         BASE.mkdir(mode=0o755, exist_ok=True)
-        with open('/run/lock/pou-control.lock','w') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX)
+        with private_lock('pou-control'):
             switch('on' if args[1] == 'on' else 'off')
             atomic('optical.json', json.dumps({'policy': 'on' if args[1] == 'on' else 'auto'}))
             run('/usr/bin/systemctl','start','pou-optical.service')
@@ -201,8 +196,7 @@ def main():
         if args[1] not in ('system', 'eco', 'balanced', 'performance', 'adaptive', 'boost'):
             raise ValueError('Invalid CPU preset')
         BASE.mkdir(mode=0o755, exist_ok=True)
-        with open('/run/lock/pou-control.lock', 'w') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with private_lock('pou-control'):
             request_id = uuid.uuid4().hex
             atomic('power.json', json.dumps({'mode': args[1], 'request_id': request_id}))
             run('/usr/bin/systemctl', 'start', 'pou-power.service')
@@ -243,8 +237,7 @@ def main():
         if model() not in PROFILES:
             raise ValueError('本机尚不支持圆形滚动')
     BASE.mkdir(mode=0o755, exist_ok=True)
-    with open('/run/lock/pou-control.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with private_lock('pou-control'):
         if args[0] in ('fan', 'fan-restore'):
             if Path('/run/panasonic-on-ubuntu/baseline.json').exists():
                 raise RuntimeError('当前风扇由 CPU 预设管理，请先恢复“系统管理”。')

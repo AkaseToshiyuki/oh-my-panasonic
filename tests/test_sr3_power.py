@@ -7,6 +7,72 @@ from panasonic_on_ubuntu import power
 
 
 class SR3PowerTests(unittest.TestCase):
+    def test_performance_to_highest_handoff_and_rollback(self):
+        cases = [
+            ('cool', 'performance', 79, 79, 0, None, 28),
+            ('warm sensor', 'performance', 80, 55, 0, None, 12),
+            ('warm sample', 'performance', 55, 80, 0, None, 12),
+            ('stale', 'performance', 40, 40, 9, None, 12),
+            ('future', 'performance', 40, 40, -10, None, 12),
+            ('missing temperature', 'performance', 40, None, 0, None, 12),
+            ('missing live sensor', 'performance', None, 40, 0, None, 6),
+            ('thermal cutoff', 'performance', 85, 60, 0, None, 6),
+            ('sample cutoff', 'performance', 60, 85, 0, None, 6),
+            ('external cap', 'performance', 45, 45, 0, 18, 12),
+            ('cold start', 'system', 40, 40, 0, None, 12),
+            ('balanced', 'balanced', 40, 40, 0, None, 12),
+        ]
+        for name, source, live, sampled, age, external, start in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                long = root/'constraint_0_power_limit_uw'
+                short = root/'constraint_1_power_limit_uw'
+                initial = {long:'35000000', short:'55000000', root/'enabled':'1',
+                           root/'fan_profile':'1', root/'no_turbo':'0'}
+                for path, value in initial.items():
+                    path.write_text(value)
+                with patch.object(power,'RAPL',root), patch.object(power,'PSTATE',root), \
+                     patch.object(power,'FIRMWARE',root), patch.object(power,'RUNTIME',root), \
+                     patch.object(power,'model_presets',return_value=power.SR3_PRESETS), \
+                     patch.object(power,'processor_limits',return_value={'pl1_w':35,'pl2_w':55}), \
+                     patch.object(power,'temperature',return_value=40) as sensor, \
+                     patch.object(power.power_profiles,'get_active',return_value='balanced') as profile, \
+                     patch.object(power.power_profiles,'set_active') as set_profile:
+                    ctl = power.Controller()
+                    ctl.apply(source)
+                    sensor.return_value = live
+                    if source == 'performance':
+                        profile.return_value = 'performance'
+                    if external is not None:
+                        long.write_text(str(external*1000000))
+                    sample = {'received':time.monotonic()-age, 'temperature':sampled}
+                    # Record raw writes, including writes by restore().
+                    writes = []
+                    write_text = Path.write_text
+                    def track(path, data, *args, **kwargs):
+                        if path == long:
+                            writes.append(int(data))
+                        return write_text(path, data, *args, **kwargs)
+                    with patch.object(Path,'write_text',track):
+                        ctl.apply('adaptive', sample)
+                    self.assertEqual(ctl.target, start)
+                    self.assertEqual(int(long.read_text()), start*1000000)
+                    self.assertEqual(int(short.read_text()), start*1000000)
+                    if name == 'cool':
+                        self.assertEqual(writes, [28000000])
+                        self.assertEqual(set_profile.call_count, 1)
+                        ctl.tick(sample)
+                        self.assertEqual(ctl.target, 28)
+                        for expected in range(29,36):
+                            ctl.tick(dict(sample, received=time.monotonic()))
+                            self.assertEqual(ctl.target, expected)
+                    if external is not None:
+                        self.assertEqual(ctl.ceiling, external)
+                    ctl.restore()
+                    self.assertEqual(int(long.read_text()), (external or 35)*1000000)
+                    self.assertEqual(int(short.read_text()), 55000000)
+                    self.assertEqual((root/'fan_profile').read_text().strip(), '1')
+
     def test_83_degree_target_and_85_degree_cutoff(self):
         for temp,expected in [(78,28),(81,27),(83,25),(84,25),(85,6),(None,6)]:
             self.assertEqual(power.thermal_target(27,28,temp,83,85),expected)
@@ -145,7 +211,7 @@ class SR3PowerTests(unittest.TestCase):
                 patch.object(power.power_profiles,'get_active',return_value='balanced'), \
                 patch.object(power.power_profiles,'set_active') as profile:
                 controller=power.Controller()
-                with self.assertRaisesRegex(RuntimeError,'处理器功率上限'):controller.apply('adaptive')
+                with self.assertRaisesRegex(OSError,'处理器功率上限'):controller.apply('adaptive')
                 self.assertIsNone(controller.baseline)
                 self.assertEqual(controller.last,{})
                 profile.assert_not_called()

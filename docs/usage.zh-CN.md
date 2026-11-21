@@ -84,3 +84,9 @@ journalctl -b -u pou-battery -u pou-power -u pou-optical
 模块未加载时，检查 `dkms status`、内核头文件和 Secure Boot 签名。不同型号的专用控制不可用时，请勿绕过机型检查。
 
 提交诊断信息前删除账户名、网络名称、IP/MAC、设备序列号及其他个人信息。不要上传人脸图像、模板、密码或私钥。
+
+### 启动功耗备份恢复
+
+SR3 管理员可运行 `sudo pou-boot-power repair-backup --apply`，用已校验且代次一致的系统盘副本修复 EFI 分区备份，然后使用原有的关闭流程。若先更新了 BIOS，请从 Ubuntu 原启动项开机。在确认新 BIOS 已恢复原厂 28/55 W 且旧安装记录完整后，可使用 `sudo pou-boot-power cleanup-after-firmware-change --apply` 清理旧启动项。
+
+充电行为历史保存在本机。拔电时间预测仅向管理员组显示。GDM、sudo 和桌面授权仅对明确启用的本地账户和受支持的认证配置使用刷脸。

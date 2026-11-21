@@ -57,11 +57,16 @@ class ServiceTest(unittest.TestCase):
             self.assertTrue(observed)
             self.assertTrue(all(x['phase']=='charging' and x['driver_mode']==0 and x['label']==label for x in observed))
 
+    def test_prediction_publication_failure_keeps_charge_hold(self):
+        with patch.object(care,'save_prediction',side_effect=OSError('read only')):
+            observed,_,_=self.exercise()
+        self.assertTrue(all(x['driver_mode']==1 and x['phase']=='holding' for x in observed))
+
     def test_learning_storage_failure_does_not_release_charge_cap(self):
         with patch('panasonic_on_ubuntu.charge_habits.Habits.observe',side_effect=OSError('disk full')):
             observed,_,_=self.exercise()
         self.assertTrue(all(x['phase']=='holding' and x['driver_mode']==1 and not x['error'] for x in observed))
-        self.assertTrue(all(x['departure_prediction'] is None for x in observed))
+        self.assertTrue(all('departure_prediction' not in x and 'departure_prediction' not in x['sample'] for x in observed))
 
     def test_continuing_charge_current_latches_failure_and_releases(self):
         observed,state,mode=self.exercise(charging=True)

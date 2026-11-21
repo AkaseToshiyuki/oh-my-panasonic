@@ -10,7 +10,7 @@ from rust_build import environment
 from build_bootguard import build as build_bootguard
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.24.1'
+VERSION = '0.24.7'
 
 def build():
     build_bootguard()
@@ -48,11 +48,11 @@ def build():
         for name in ['pou-wheelpad.service', 'pou-power.service', 'pou-optical.service', 'pou-battery.service', 'pou-face-broker.socket', 'pou-face-broker@.service', 'pou-firmware-restore.service', 'pou-boot-power-init.service', 'pou-boot-power-confirm.service', 'pou-boot-power-confirm.timer']:
             put('packaging/' + name, 'usr/lib/systemd/system/' + name)
         for name in ('pou_firmware.c', 'pou_fan_control.h', 'pou_models.h', 'pou_battery.c', 'dkms.conf', 'Makefile', 'COPYING'):
-            put('kernel/' + name, 'usr/src/pou-firmware-0.8.2/' + name)
+            put('kernel/' + name, 'usr/src/pou-firmware-0.8.3/' + name)
         for name in ('pou_sr3_fan.c', 'dkms.conf', 'Makefile'):
-            put('kernel/sr3/' + name, 'usr/src/pou-sr3-fan-0.2.2/' + name)
+            put('kernel/sr3/' + name, 'usr/src/pou-sr3-fan-0.2.3/' + name)
         for name in ('COPYING', 'pou_models.h', 'pou_battery.c'):
-            put('kernel/' + name, 'usr/src/pou-sr3-fan-0.2.2/' + name)
+            put('kernel/' + name, 'usr/src/pou-sr3-fan-0.2.3/' + name)
         for name in ['pou-monitor.service', 'pou-monitor.timer', 'pou-tray.service']:
             put('packaging/' + name, 'usr/lib/systemd/user/' + name)
         put('packaging/71-pou-input.rules', 'usr/lib/udev/rules.d/71-pou-input.rules')

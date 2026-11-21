@@ -222,8 +222,19 @@ static ssize_t arm_transition_store(struct device *dev, struct device_attribute 
     return count;
 }
 static DEVICE_ATTR_WO(arm_transition);
+static const char *last_transition = "none";
+static ssize_t last_transition_show(struct device *dev, struct device_attribute *a, char *buf)
+{
+    ssize_t result;
+    mutex_lock(&battery_lock);
+    result = sysfs_emit(buf, "%s\n", last_transition);
+    mutex_unlock(&battery_lock);
+    return result;
+}
+static DEVICE_ATTR_RO(last_transition);
+
 static struct attribute *attrs[] = {&dev_attr_mode.attr, &dev_attr_ac_override.attr,
-    &dev_attr_offline_capabilities.attr, &dev_attr_arm_transition.attr,
+    &dev_attr_last_transition.attr, &dev_attr_offline_capabilities.attr, &dev_attr_arm_transition.attr,
     &dev_attr_lease_seconds.attr, &dev_attr_reason.attr, &dev_attr_interface_version.attr, NULL};
 static const struct attribute_group group = {.attrs = attrs};
 
@@ -233,10 +244,15 @@ static int transition_begin(unsigned int transition)
     u8 result;
     int err = restore_retry_locked();
     armed_transition = 0;
-    if (err || !armed || supply_value("AC", POWER_SUPPLY_PROP_ONLINE) != 1 ||
-        supply_value("BAT1", POWER_SUPPLY_PROP_PRESENT) != 1)
+    if (err || !armed)
         return err;
+    if (!external_supply_online() || supply_value("BAT1", POWER_SUPPLY_PROP_PRESENT) != 1) {
+        last_transition = "skipped-no-supply";
+        pr_info("pou_battery: transition %u skipped: external power or battery absent\n", transition);
+        return 0;
+    }
     offline_held = true;
+    last_transition = "failed";
     err = battery_command(7, 1, 0, &result);
     if (!err && result != 1)
         err = -EIO;
@@ -245,6 +261,7 @@ static int transition_begin(unsigned int transition)
         if (!restore_retry_locked())
             offline_held = false;
     } else {
+        last_transition = transition == 1 ? "suspend-held" : "poweroff-held";
         pr_info("pou_battery: charging paused for transition %u\n", transition);
     }
     return err;
@@ -342,5 +359,5 @@ static void __exit battery_exit(void)
 module_init(battery_init); module_exit(battery_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AkaseToshiyuki");
-MODULE_VERSION("0.8.2");
+MODULE_VERSION("0.8.3");
 MODULE_DESCRIPTION("Validated Panasonic battery controls with expiring kernel lease");
